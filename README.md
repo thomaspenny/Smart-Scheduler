@@ -2,6 +2,8 @@
 
 A comprehensive desktop application suite for optimizing travel routes, clustering service regions, and scheduling appointments using the Traveling Salesman Problem (TSP) algorithms and geographic clustering.
 
+You can download the app installer here: https://www.dropbox.com/scl/fi/7ke4svhpusabz9pmwk8kr/Smart_Scheduler_Setup_1_0.exe?rlkey=xqx9z03fa752bier1xlzn5sir&st=9nqp5yee&dl=1
+
 ## Overview
 
 This project provides an integrated workflow for businesses that need to efficiently schedule and route field service appointments across multiple locations. The suite consists of four specialized applications accessed through a central launcher interface, all working with project-based data management.
