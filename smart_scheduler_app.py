@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 import sys
 import os
 import pandas as pd
@@ -101,6 +101,109 @@ class SmartSchedulerApp:
             hours = minutes // 60
             mins = minutes % 60
             self.time_slots.append(f"{hours}:{mins:02d}")
+    
+    def show_info_dialog(self, title, message):
+        """Show an info dialog that stays on top of the main window"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.geometry("400x200")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        
+        # Center dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        main_frame = ttk.Frame(dialog, padding="20")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text=message, wraplength=350, justify=tk.LEFT).pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Button(main_frame, text="OK", command=dialog.destroy, width=10).pack(pady=(10, 0))
+        
+        dialog.wait_window()
+    
+    def show_warning_dialog(self, title, message):
+        """Show a warning dialog that stays on top of the main window"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.geometry("400x200")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        
+        # Center dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        main_frame = ttk.Frame(dialog, padding="20")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text=message, wraplength=350, justify=tk.LEFT).pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Button(main_frame, text="OK", command=dialog.destroy, width=10).pack(pady=(10, 0))
+        
+        dialog.wait_window()
+    
+    def show_error_dialog(self, title, message):
+        """Show an error dialog that stays on top of the main window"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.geometry("400x250")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        
+        # Center dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        main_frame = ttk.Frame(dialog, padding="20")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text=message, wraplength=350, justify=tk.LEFT).pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Button(main_frame, text="OK", command=dialog.destroy, width=10).pack(pady=(10, 0))
+        
+        dialog.wait_window()
+    
+    def show_yes_no_dialog(self, title, message):
+        """Show a yes/no dialog that stays on top of the main window. Returns True for Yes, False for No"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.geometry("400x200")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        
+        # Center dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
+        
+        result = [None]
+        
+        main_frame = ttk.Frame(dialog, padding="20")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(main_frame, text=message, wraplength=350, justify=tk.LEFT).pack(fill=tk.BOTH, expand=True, pady=(0, 20))
+        
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X)
+        
+        ttk.Button(button_frame, text="Yes", command=lambda: (result.__setitem__(0, True), dialog.destroy()), width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="No", command=lambda: (result.__setitem__(0, False), dialog.destroy()), width=10).pack(side=tk.LEFT, padx=5)
+        
+        dialog.wait_window()
+        return result[0]
     
     def outlook_color_to_rgb(self, color_code):
         """Convert Outlook color code to RGB hex color"""
@@ -415,7 +518,7 @@ class SmartSchedulerApp:
             self.status_label.config(text="Project data loaded successfully", foreground='green')
         
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to load project data:\n{e}")
+            self.show_error_dialog("Error", f"Failed to load project data:\n{e}")
             self.status_label.config(text="Error loading data", foreground='red')
     
     def on_time_config_changed(self):
@@ -425,7 +528,7 @@ class SmartSchedulerApp:
             new_end = int(self.end_hour_var.get())
             
             if new_start >= new_end:
-                messagebox.showwarning("Invalid Times", "Start time must be before end time.")
+                self.show_warning_dialog("Invalid Times", "Start time must be before end time.")
                 self.start_hour_var.set(str(self.start_hour))
                 self.end_hour_var.set(str(self.end_hour))
                 return
@@ -841,7 +944,7 @@ class SmartSchedulerApp:
             
             # Check if it's a confirmed appointment
             if postcode in self.confirmed_appointments:
-                if messagebox.askyesno("Remove Confirmed Appointment", 
+                if self.show_yes_no_dialog("Remove Confirmed Appointment", 
                                        f"This is a confirmed appointment for {postcode}.\nAre you sure you want to remove it?"):
                     # Remove from confirmed appointments
                     del self.confirmed_appointments[postcode]
@@ -873,7 +976,7 @@ class SmartSchedulerApp:
         # Check if there's already a pending appointment
         if self.pending_appointment:
             pending_date, pending_time, pending_postcode, pending_duration = self.pending_appointment
-            response = messagebox.askyesno(
+            response = self.show_yes_no_dialog(
                 "Replace Pending Appointment?",
                 f"You already have a pending appointment:\n{pending_postcode} on {pending_date} at {pending_time} ({pending_duration} min)\n\nDo you want to replace it with a new selection?\n\n(Submit the current appointment first to keep it)"
             )
@@ -894,13 +997,13 @@ class SmartSchedulerApp:
         postcode = self.postcode_var.get().strip().upper()
         
         if not postcode:
-            messagebox.showwarning("No Postcode Selected", "Please select a postcode first.")
+            self.show_warning_dialog("No Postcode Selected", "Please select a postcode first.")
             return
         
         # VALIDATION: Check if this postcode already has a confirmed appointment
         if postcode in self.confirmed_appointments:
             existing_date, existing_time, _, _ = self.confirmed_appointments[postcode]
-            messagebox.showerror(
+            self.show_error_dialog(
                 "Duplicate Location",
                 f"Location {postcode} already has a confirmed appointment on {existing_date} at {existing_time}.\n\nOnly 1 appointment per location is allowed.\n\nPlease remove the existing appointment first if you need to reschedule."
             )
@@ -919,7 +1022,7 @@ class SmartSchedulerApp:
                 conflict_msg += f"• {conflict}\n"
             conflict_msg += "\nConflicting travel times are marked in red."
             
-            messagebox.showinfo("Travel Time Conflict", conflict_msg, icon='info')
+            self.show_info_dialog("Travel Time Conflict", conflict_msg)
         
         # Stage as pending appointment with current duration setting
         current_duration = int(self.appointment_duration_var.get())
@@ -978,6 +1081,9 @@ class SmartSchedulerApp:
         # Remove existing travel segments for this date
         self.travel_segments = [seg for seg in self.travel_segments if seg[0] != date_str]
         
+        # Remove existing conflicts for this date
+        self.conflicting_segments = {seg for seg in self.conflicting_segments if seg[0] != date_str}
+        
         # Get all appointments for this date, sorted by time
         date_appointments = [(k, v) for k, v in self.appointments.items() if k[0] == date_str]
         if not date_appointments:
@@ -994,12 +1100,15 @@ class SmartSchedulerApp:
             travel_to_first = self.get_travel_time(self.home_postcode, first_appt[1])
             # Travel starts before the appointment and ends at appointment time
             travel_start = first_time_minutes - travel_to_first
-            if travel_start >= self.start_hour * 60:  # Only if it starts after configured start time
-                self.travel_segments.append((date_str, travel_start, first_time_minutes, {
-                    'minutes': travel_to_first,
-                    'to_home': False,
-                    'from_home': True
-                }))
+            # Always add, but mark as conflict if starts before timetable
+            is_exceeding_start = travel_start < self.start_hour * 60
+            self.travel_segments.append((date_str, travel_start, first_time_minutes, {
+                'minutes': travel_to_first,
+                'to_home': False,
+                'from_home': True
+            }))
+            if is_exceeding_start:
+                self.conflicting_segments.add((date_str, travel_start, first_time_minutes))
         
         # Calculate travel between appointments
         for i in range(len(date_appointments) - 1):
@@ -1047,12 +1156,15 @@ class SmartSchedulerApp:
         
         travel_home_end = last_end_minutes + travel_home_minutes
         
-        if travel_home_end <= self.end_hour * 60:  # Only if it ends before configured end time
-            self.travel_segments.append((date_str, last_end_minutes, travel_home_end, {
-                'minutes': travel_home_minutes,
-                'to_home': True,
-                'from_home': False
-            }))
+        # Always add travel home, but mark as conflict if it exceeds timetable end time
+        is_exceeding_end = travel_home_end > self.end_hour * 60
+        self.travel_segments.append((date_str, last_end_minutes, travel_home_end, {
+            'minutes': travel_home_minutes,
+            'to_home': True,
+            'from_home': False
+        }))
+        if is_exceeding_end:
+            self.conflicting_segments.add((date_str, last_end_minutes, travel_home_end))
     
     def get_travel_time(self, origin, destination):
         """Get travel time between two postcodes"""
@@ -1162,7 +1274,7 @@ class SmartSchedulerApp:
     def clear_schedule(self):
         """Clear appointments for the currently selected region"""
         if not self.selected_region:
-            messagebox.showinfo("No Region Selected", "Please select a region first.")
+            self.show_info_dialog("No Region Selected", "Please select a region first.")
             return
         
         # Get postcodes in the current region
@@ -1173,10 +1285,10 @@ class SmartSchedulerApp:
         region_pending = self.pending_appointment and self.pending_appointment[2] in region_postcodes_set
         
         if not region_appointments and not region_pending:
-            messagebox.showinfo("Empty Schedule", "No appointments in this region.")
+            self.show_info_dialog("Empty Schedule", "No appointments in this region.")
             return
         
-        response = messagebox.askyesno("Clear Region Schedule", 
+        response = self.show_yes_no_dialog("Clear Region Schedule", 
                                       f"Are you sure you want to clear all appointments for Region {self.selected_region}?")
         if response:
             # Clear appointments for postcodes in this region (appointments dict has (date, time) keys)
@@ -1305,18 +1417,18 @@ class SmartSchedulerApp:
     def sync_to_outlook(self):
         """Sync all appointments that aren't yet in Outlook"""
         if not self.confirmed_appointments:
-            messagebox.showinfo("No Appointments", "No confirmed appointments to sync.")
+            self.show_info_dialog("No Appointments", "No confirmed appointments to sync.")
             return
         
         # Count how many need syncing
         to_sync = [(pc, data) for pc, data in self.confirmed_appointments.items() if not data[3]]  # data[3] is in_outlook
         
         if not to_sync:
-            messagebox.showinfo("Already Synced", "All appointments are already in Outlook!")
+            self.show_info_dialog("Already Synced", "All appointments are already in Outlook!")
             return
         
         # Confirm with user
-        response = messagebox.askyesno(
+        response = self.show_yes_no_dialog(
             "Sync to Outlook",
             f"Found {len(to_sync)} appointment(s) not yet in Outlook.\n\nDo you want to create Outlook events for these appointments?"
         )
@@ -1364,15 +1476,15 @@ class SmartSchedulerApp:
                 msg = f"Successfully synced {created_count} appointment(s) to Outlook!"
                 if failed:
                     msg += f"\n\nFailed to sync {len(failed)} appointment(s):\n" + "\n".join(failed)
-                messagebox.showinfo("Sync Complete", msg)
+                self.show_info_dialog("Sync Complete", msg)
             else:
                 error_details = "\n".join(failed) if failed else "Unknown error"
-                messagebox.showerror("Sync Failed", f"Failed to sync appointments to Outlook.\n\nDetails:\n{error_details}")
+                self.show_error_dialog("Sync Failed", f"Failed to sync appointments to Outlook.\n\nDetails:\n{error_details}")
                 
         except Exception as e:
             import traceback
             error_trace = traceback.format_exc()
-            messagebox.showerror("Outlook Error", f"Failed to connect to Outlook:\n\n{e}\n\nDetails:\n{error_trace}")
+            self.show_error_dialog("Outlook Error", f"Failed to connect to Outlook:\n\n{e}\n\nDetails:\n{error_trace}")
     
     def load_confirmed_appointments(self):
         """Load confirmed appointments from CSV"""
@@ -1411,7 +1523,7 @@ class SmartSchedulerApp:
     def submit_appointment(self):
         """Submit the pending appointment after validation"""
         if not self.pending_appointment:
-            messagebox.showinfo("No Appointment", "No appointment selected to submit.")
+            self.show_info_dialog("No Appointment", "No appointment selected to submit.")
             return
         
         date, time, postcode, duration = self.pending_appointment
@@ -1419,7 +1531,7 @@ class SmartSchedulerApp:
         # Validation: Check if this postcode already has a confirmed appointment
         if postcode in self.confirmed_appointments:
             existing_date, existing_time, existing_duration, _ = self.confirmed_appointments[postcode]
-            messagebox.showerror(
+            self.show_error_dialog(
                 "Duplicate Location", 
                 f"Location {postcode} already has a confirmed appointment on {existing_date} at {existing_time}.\\n\\nOnly 1 appointment per location is allowed."
             )
@@ -1442,7 +1554,7 @@ class SmartSchedulerApp:
                 category_name = f"Appointment - {color_name}"
                 outlook_success = self.create_outlook_appointment(outlook, postcode, date, time, duration, category_name, color_code)
             except Exception as e:
-                messagebox.showerror("Outlook Error", f"Failed to create Outlook appointment:\\n{e}")
+                self.show_error_dialog("Outlook Error", f"Failed to create Outlook appointment:\\n{e}")
                 outlook_success = False
         
         # Save to confirmed appointments (with outlook status)
@@ -1693,13 +1805,13 @@ class SmartSchedulerApp:
         """Open dialog showing available time slots in timetable format"""
         postcode = self.postcode_var.get()
         if not postcode:
-            messagebox.showwarning("No Postcode", "Please select a postcode first.")
+            self.show_warning_dialog("No Postcode", "Please select a postcode first.")
             return
         
         available_slots = self.get_available_slots()
         
         if not available_slots:
-            messagebox.showinfo("No Available Slots", 
+            self.show_info_dialog("No Available Slots", 
                               "There are no available time slots without travel conflicts for this location.")
             return
         
@@ -1844,7 +1956,14 @@ class SmartSchedulerApp:
         
         # Button frame
         button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill=tk.X)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        # Status label for feedback
+        status_label = ttk.Label(button_frame, text="", font=('Arial', 9))
+        status_label.pack(side=tk.LEFT, padx=(0, 20))
+        
+        copy_button = ttk.Button(button_frame, text="Copy to Clipboard")
+        copy_button.pack(side=tk.LEFT, padx=5)
         
         def copy_to_clipboard():
             """Copy message to clipboard"""
@@ -1859,9 +1978,17 @@ class SmartSchedulerApp:
             message = self.format_availability_message(selected_slots)
             try:
                 pyperclip.copy(message)
-                messagebox.showinfo("Copied", "Message copied to clipboard!")
+                status_label.config(text="✓ Copied to clipboard!", foreground='green')
+                copy_button.config(state='disabled')
+                # Reset after 2 seconds
+                dialog.after(2000, lambda: (
+                    status_label.config(text=""),
+                    copy_button.config(state='normal')
+                ))
             except Exception as e:
-                messagebox.showerror("Copy Error", f"Failed to copy to clipboard:\n{e}")
+                status_label.config(text=f"✗ Failed: {str(e)[:30]}", foreground='red')
+                # Reset after 3 seconds
+                dialog.after(3000, lambda: status_label.config(text=""))
         
         def select_all():
             """Select all available cells"""
@@ -1883,7 +2010,7 @@ class SmartSchedulerApp:
                     widget.config(bg='#FFB6C6', fg='#8B0000', text="✗")
             update_message()
         
-        ttk.Button(button_frame, text="Copy to Clipboard", command=copy_to_clipboard).pack(side=tk.LEFT, padx=5)
+        copy_button.config(command=copy_to_clipboard)
         ttk.Button(button_frame, text="Select All", command=select_all).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Deselect All", command=deselect_all).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Close", command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
