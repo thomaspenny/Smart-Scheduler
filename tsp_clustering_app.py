@@ -704,6 +704,10 @@ class TSPClusteringApp:
     def run_clustering(self):
         """Run the TSP clustering analysis"""
         try:
+            # Clear old region data to prevent stale data from previous clustering runs
+            self.region_names = {}
+            self.region_colors = {}
+            
             # Get parameters
             desired_regions = int(self.num_regions_var.get())
             depot_postcode = self.depot_postcode_var.get().strip().upper()
@@ -1933,10 +1937,13 @@ class TSPClusteringApp:
             names_file = os.path.join(self.output_dir, "region_names.csv")
             data = []
             
-            # Get all regions
-            all_regions = set(self.region_names.keys()) | set(self.region_colors.keys())
-            if not all_regions and self.n_clusters:
+            # Only use regions from current clustering (1 to n_clusters)
+            # This prevents stale data from previous runs with more regions
+            if self.n_clusters:
                 all_regions = set(range(1, self.n_clusters + 1))
+            else:
+                # Fallback to dictionary keys if n_clusters not set
+                all_regions = set(self.region_names.keys()) | set(self.region_colors.keys())
             
             for region in sorted(all_regions):
                 name = self.region_names.get(region, f"Region {region}")

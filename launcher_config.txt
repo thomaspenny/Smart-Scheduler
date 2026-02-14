@@ -1,0 +1,7 @@
+{
+    "projects_directory": "c:\\Users\\penny\\OneDrive\\Documents\\GitHub\\Smart-Scheduler\\Projects",
+    "active_project": "Example Project",
+    "recent_projects": [
+        "Example Project"
+    ]
+}

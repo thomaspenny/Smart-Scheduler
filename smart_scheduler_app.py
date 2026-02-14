@@ -101,6 +101,70 @@ class SmartSchedulerApp:
             mins = minutes % 60
             self.time_slots.append(f"{hours}:{mins:02d}")
     
+    def outlook_color_to_rgb(self, color_code):
+        """Convert Outlook color code to RGB hex color"""
+        # Approximate mapping of Outlook colors to RGB hex values
+        color_map = {
+            1: '#DC143C',   # Red
+            2: '#FF8C00',   # Orange
+            3: '#FFB6C1',   # Peach
+            4: '#FFD700',   # Yellow
+            5: '#32CD32',   # Green
+            6: '#008B8B',   # Teal
+            7: '#808000',   # Olive
+            8: '#4169E1',   # Blue
+            9: '#9370DB',   # Purple
+            10: '#800000',  # Maroon
+            11: '#4682B4',  # Steel
+            12: '#36454F',  # DarkSteel
+            13: '#808080',  # Gray
+            14: '#696969',  # DarkGray
+            15: '#000000',  # Black
+            16: '#8B0000',  # DarkRed
+            17: '#FF4500',  # DarkOrange
+            18: '#CD5C5C',  # DarkPeach
+            19: '#DAA520',  # DarkYellow
+            20: '#006400',  # DarkGreen
+            21: '#008080',  # DarkTeal
+            22: '#556B2F',  # DarkOlive
+            23: '#00008B',  # DarkBlue
+            24: '#483D8B',  # DarkPurple
+        }
+        return color_map.get(color_code, '#32CD32')  # Default to Green
+    
+    def lighten_color(self, hex_color, factor=0.6):
+        """Lighten a hex color by blending with white"""
+        # Remove '#' if present
+        hex_color = hex_color.lstrip('#')
+        
+        # Convert to RGB
+        r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+        
+        # Blend with white
+        r = int(r + (255 - r) * factor)
+        g = int(g + (255 - g) * factor)
+        b = int(b + (255 - b) * factor)
+        
+        # Convert back to hex
+        return f'#{r:02x}{g:02x}{b:02x}'
+    
+    def get_region_color(self):
+        """Get the color for the currently selected region from region_names.csv"""
+        if self.selected_region is None or self.region_names_df is None:
+            return '#32CD32'  # Default green if no region selected
+        
+        # Check if color_code column exists
+        if 'color_code' not in self.region_names_df.columns:
+            return '#32CD32'  # Default green if no color codes
+        
+        # Find the region's color code
+        region_row = self.region_names_df[self.region_names_df['region'] == self.selected_region]
+        if len(region_row) > 0:
+            color_code = int(region_row['color_code'].iloc[0])
+            return self.outlook_color_to_rgb(color_code)
+        
+        return '#32CD32'  # Default green
+    
     def setup_ui(self):
         # Main container with padding
         main_frame = ttk.Frame(self.root, padding="15")
@@ -1164,9 +1228,9 @@ class SmartSchedulerApp:
         
         region_num = int(region_row.iloc[0]['region'])
         
-        # Get color from region_summary
-        if self.regions_df is not None:
-            region_data = self.regions_df[self.regions_df['region'] == region_num]
+        # Get color from region_names_df
+        if self.region_names_df is not None:
+            region_data = self.region_names_df[self.region_names_df['region'] == region_num]
             if not region_data.empty and 'color_code' in region_data.columns:
                 return int(region_data.iloc[0]['color_code'])
         
