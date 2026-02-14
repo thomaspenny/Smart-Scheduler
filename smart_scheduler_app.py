@@ -10,6 +10,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import win32com.client
 import time
+import pyperclip
 
 # Outlook Category Colors Enumeration (OlCategoryColor)
 OUTLOOK_COLORS = {
@@ -239,6 +240,11 @@ class SmartSchedulerApp:
         ttk.Label(selection_frame, text="Home Base:", font=('Arial', 10)).grid(row=1, column=8, sticky=tk.W, padx=(20, 5), pady=(10, 0))
         self.home_label = ttk.Label(selection_frame, text="-", font=('Arial', 10, 'bold'), foreground='blue')
         self.home_label.grid(row=1, column=9, sticky=tk.W, pady=(10, 0))
+        
+        # Offer Slots button
+        self.offer_slots_btn = ttk.Button(selection_frame, text="Offer Available Slots", 
+                                         command=self.open_available_slots_dialog, state='disabled')
+        self.offer_slots_btn.grid(row=1, column=10, sticky=tk.W, padx=(20, 0), pady=(10, 0))
         
         # Timetable frame with scrollbars
         timetable_frame = ttk.LabelFrame(main_frame, text="Timetable", padding="10")
@@ -1215,6 +1221,14 @@ class SmartSchedulerApp:
             self.display_travel_times(postcode)
             # Also update the map to highlight the selected postcode
             self.update_region_visualization()
+            
+            # Enable/disable the offer slots button based on whether postcode has confirmed appointment
+            if postcode in self.confirmed_appointments:
+                self.offer_slots_btn.config(state='disabled')
+            else:
+                self.offer_slots_btn.config(state='normal')
+        else:
+            self.offer_slots_btn.config(state='disabled')
     
     def get_region_color_for_postcode(self, postcode):
         """Get the region color code for a given postcode"""
@@ -1523,6 +1537,356 @@ class SmartSchedulerApp:
         dialog.wait_window()
         
         return result[0]
+
+    def get_available_slots(self):
+        """Get all time slots without travel time conflicts for selected postcode, accounting for appointment duration"""
+        postcode = self.postcode_var.get()
+        if not postcode or not self.selected_dates:
+            return []
+        
+        duration = int(self.appointment_duration_var.get())
+        available_slots = []
+        
+        for date in self.selected_dates:
+            date_str = date.strftime('%d-%b-%y')
+            
+            for time_slot in self.time_slots:
+                # Calculate if appointment would fit within working hours
+                start_minutes = self.time_to_minutes(time_slot)
+                end_minutes = start_minutes + duration
+                end_hour = end_minutes // 60
+                
+                # Check if appointment extends past end_hour
+                if end_hour > self.end_hour:
+                    continue
+                
+                # Check if appointment would overlap with existing appointments on this date
+                has_conflict = False
+                for other_slot in self.time_slots:
+                    other_start_minutes = self.time_to_minutes(other_slot)
+                    other_cell_key = (date_str, other_slot)
+                    
+                    # If there's an appointment in another slot, check if it overlaps
+                    if other_cell_key in self.appointments:
+                        # Get the duration of the other appointment (default to 30 min if not found)
+                        other_duration = 30
+                        if other_cell_key[1] in self.appointments:
+                            # Try to find duration from confirmed appointments
+                            for pc, (app_date, app_time, app_duration, _) in self.confirmed_appointments.items():
+                                if app_date == date_str and app_time == other_slot:
+                                    other_duration = app_duration
+                                    break
+                        
+                        other_end_minutes = other_start_minutes + other_duration
+                        
+                        # Check for overlap: new appointment and existing appointment
+                        if start_minutes < other_end_minutes and end_minutes > other_start_minutes:
+                            has_conflict = True
+                            break
+                
+                if has_conflict:
+                    continue
+                
+                # Check if slot is already occupied
+                cell_key = (date_str, time_slot)
+                if cell_key in self.appointments:
+                    continue
+                
+                # Temporarily add appointment to check for travel conflicts
+                self.appointments[cell_key] = postcode
+                self.recalculate_travel_times(date_str)
+                
+                conflicts = self.check_travel_conflicts(date_str)
+                
+                # Remove temporary appointment
+                del self.appointments[cell_key]
+                
+                # If no conflicts, this slot is available
+                if not conflicts:
+                    available_slots.append((date, date_str, time_slot))
+        
+        return available_slots
+
+    def format_time_12hour(self, time_slot):
+        """Convert 24-hour time slot (HH:MM) to 12-hour format"""
+        try:
+            time_obj = datetime.strptime(time_slot, '%H:%M')
+            return time_obj.strftime('%I:%M %p')
+        except:
+            return time_slot
+
+    def minutes_to_hours_str(self, minutes):
+        """Convert minutes to human-readable hours string (e.g., '3 hours', '1.5 hours')"""
+        if minutes < 60:
+            return f"{minutes} minutes"
+        
+        hours = minutes / 60
+        if hours == int(hours):
+            return f"{int(hours)} hour{'s' if hours != 1 else ''}"
+        else:
+            return f"{hours} hours"
+
+    def format_availability_message(self, selected_slots):
+        """Format a formal message with selected available time slots, consolidating consecutive slots"""
+        if not selected_slots:
+            return "No time slots selected."
+        
+        # Get appointment duration
+        duration = int(self.appointment_duration_var.get())
+        duration_str = self.minutes_to_hours_str(duration)
+        
+        # Group slots by date and sort by time
+        slots_by_date = {}
+        for date, date_str, time_slot in selected_slots:
+            if date_str not in slots_by_date:
+                slots_by_date[date_str] = []
+            slots_by_date[date_str].append((date, time_slot, self.time_to_minutes(time_slot)))
+        
+        # Sort each date's slots by time
+        for date_str in slots_by_date:
+            slots_by_date[date_str].sort(key=lambda x: x[2])
+        
+        # Build message
+        message_lines = [f"I can offer a {duration_str} appointment starting at any of these times:"]
+        message_lines.append("")
+        
+        for date_str in sorted(slots_by_date.keys()):
+            date_obj = datetime.strptime(date_str, '%d-%b-%y')
+            day_name = date_obj.strftime('%A')
+            
+            slots = slots_by_date[date_str]
+            
+            # Group consecutive slots into ranges
+            ranges = []
+            current_range_start = slots[0]
+            current_range_end = slots[0]
+            
+            for i in range(1, len(slots)):
+                current_start_minutes = slots[i][2]
+                prev_end_minutes = slots[i-1][2] + 30  # Previous slot end time
+                
+                # Check if consecutive (next slot starts 30 mins after previous slot started)
+                if current_start_minutes == prev_end_minutes:
+                    current_range_end = slots[i]
+                else:
+                    # Gap found, save the range and start a new one
+                    ranges.append((current_range_start, current_range_end))
+                    current_range_start = slots[i]
+                    current_range_end = slots[i]
+            
+            # Add the last range
+            ranges.append((current_range_start, current_range_end))
+            
+            # Format each range
+            for range_start, range_end in ranges:
+                start_time_12h = self.format_time_12hour(range_start[1])
+                end_time_12h = self.format_time_12hour(range_end[1])
+                
+                message_lines.append(f"• {day_name}, {date_str}: {start_time_12h} - {end_time_12h}")
+        
+        message_lines.append("")
+        message_lines.append("Please let me know which time(s) works best for you.")
+        
+        return "\n".join(message_lines)
+
+    def open_available_slots_dialog(self):
+        """Open dialog showing available time slots in timetable format"""
+        postcode = self.postcode_var.get()
+        if not postcode:
+            messagebox.showwarning("No Postcode", "Please select a postcode first.")
+            return
+        
+        available_slots = self.get_available_slots()
+        
+        if not available_slots:
+            messagebox.showinfo("No Available Slots", 
+                              "There are no available time slots without travel conflicts for this location.")
+            return
+        
+        # Get appointment duration for display
+        duration = int(self.appointment_duration_var.get())
+        duration_str = self.minutes_to_hours_str(duration)
+        
+        # Create dialog window
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Available Time Slots - {postcode} ({duration_str})")
+        dialog.geometry("1200x700")
+        
+        # Main frame
+        main_frame = ttk.Frame(dialog, padding="15")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Title
+        ttk.Label(main_frame, text=f"Select Available Time Slots for {postcode}", 
+                 font=('Arial', 12, 'bold')).pack(anchor=tk.W, pady=(0, 10))
+        
+        # Dictionary to track cell selection
+        cell_states = {}
+        
+        # Get unique dates from available slots
+        unique_dates = sorted(set((date, date_str) for date, date_str, _ in available_slots), key=lambda x: x[0])
+        
+        # Use all time slots from the timetable configuration
+        all_time_slots = self.time_slots
+        
+        # Initialize cells for all available slot combinations
+        for date, date_str in unique_dates:
+            for time_slot in all_time_slots:
+                # Check if this combination exists in available_slots
+                exists = any(d_str == date_str and t == time_slot for _, d_str, t in available_slots)
+                if exists:
+                    cell_states[(date_str, time_slot)] = tk.BooleanVar(value=True)
+        
+        # Timetable frame with scrollbars
+        timetable_frame = ttk.LabelFrame(main_frame, text="Click cells to toggle selection (Green = Available, Gray = Not Available)", padding="10")
+        timetable_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        timetable_frame.columnconfigure(0, weight=1)
+        timetable_frame.rowconfigure(0, weight=1)
+        
+        # Create canvas with scrollbars
+        canvas = tk.Canvas(timetable_frame, bg='white')
+        canvas.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        v_scrollbar = ttk.Scrollbar(timetable_frame, orient=tk.VERTICAL, command=canvas.yview)
+        v_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        
+        h_scrollbar = ttk.Scrollbar(timetable_frame, orient=tk.HORIZONTAL, command=canvas.xview)
+        h_scrollbar.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        
+        canvas.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
+        
+        # Frame inside canvas for timetable
+        timetable_inner = ttk.Frame(canvas)
+        canvas_window = canvas.create_window((0, 0), window=timetable_inner, anchor='nw')
+        
+        def configure_scroll_region(event):
+            canvas.configure(scrollregion=canvas.bbox('all'))
+        
+        timetable_inner.bind('<Configure>', configure_scroll_region)
+        
+        # Message preview frame
+        message_frame = ttk.LabelFrame(main_frame, text="Message Preview", padding="10")
+        message_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        message_text = tk.Text(message_frame, height=8, wrap=tk.WORD, 
+                              font=('Courier', 9), state='disabled')
+        message_text.pack(fill=tk.BOTH, expand=True)
+        
+        def update_message():
+            """Update message preview based on selected cells"""
+            selected_slots = []
+            for (date_str, time_slot), var in cell_states.items():
+                if var.get():
+                    for date, d_str, t_slot in available_slots:
+                        if d_str == date_str and t_slot == time_slot:
+                            selected_slots.append((date, date_str, time_slot))
+                            break
+            
+            message = self.format_availability_message(selected_slots)
+            message_text.config(state='normal')
+            message_text.delete('1.0', tk.END)
+            message_text.insert('1.0', message)
+            message_text.config(state='disabled')
+        
+        # Create timetable header row
+        date_header = tk.Label(timetable_inner, text="Date", bg='#2C5F8D', fg='white',
+                              font=('Arial', 10, 'bold'), width=15, height=2, relief=tk.RIDGE, bd=1)
+        date_header.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Time slot headers
+        for col, time_slot in enumerate(all_time_slots, start=1):
+            time_label = tk.Label(timetable_inner, text=time_slot, bg='#2C5F8D', fg='white',
+                                 font=('Arial', 9, 'bold'), width=4, height=2, relief=tk.RIDGE, bd=1)
+            time_label.grid(row=0, column=col, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Create rows for each date
+        for row_idx, (date, date_str) in enumerate(unique_dates, start=1):
+            # Date label
+            day_name = date.strftime('%a')
+            date_label = tk.Label(timetable_inner, text=f"{day_name}\n{date_str}", bg='#E8E8E8',
+                                 font=('Arial', 9, 'bold'), width=15, height=3, relief=tk.RIDGE, bd=1)
+            date_label.grid(row=row_idx, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+            
+            # Time slot cells
+            for col_idx, time_slot in enumerate(all_time_slots, start=1):
+                cell_key = (date_str, time_slot)
+                
+                # Check if this slot is available
+                is_available = cell_key in cell_states
+                
+                if is_available:
+                    # Create clickable cell
+                    cell = tk.Label(timetable_inner, text="✓", bg='#90EE90', fg='#006400',
+                                   font=('Arial', 14, 'bold'), width=4, height=3, relief=tk.RAISED, bd=1)
+                    var = cell_states[cell_key]
+                    
+                    def make_click_handler(c, key, v, msg_func):
+                        def on_click(event):
+                            v.set(not v.get())
+                            # Update cell appearance
+                            if v.get():
+                                event.widget.config(bg='#90EE90', fg='#006400', text="✓")
+                            else:
+                                event.widget.config(bg='#FFB6C6', fg='#8B0000', text="✗")
+                            msg_func()
+                        return on_click
+                    
+                    cell.bind('<Button-1>', make_click_handler(cell, cell_key, var, update_message))
+                    cell.grid(row=row_idx, column=col_idx, sticky=(tk.W, tk.E, tk.N, tk.S))
+                else:
+                    # Unavailable slot
+                    cell = tk.Label(timetable_inner, text="-", bg='#D3D3D3', fg='#696969',
+                                   font=('Arial', 10, 'bold'), width=4, height=3, relief=tk.SUNKEN, bd=1)
+                    cell.grid(row=row_idx, column=col_idx, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Initial message
+        update_message()
+        
+        # Button frame
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X)
+        
+        def copy_to_clipboard():
+            """Copy message to clipboard"""
+            selected_slots = []
+            for (date_str, time_slot), var in cell_states.items():
+                if var.get():
+                    for date, d_str, t_slot in available_slots:
+                        if d_str == date_str and t_slot == time_slot:
+                            selected_slots.append((date, date_str, time_slot))
+                            break
+            
+            message = self.format_availability_message(selected_slots)
+            try:
+                pyperclip.copy(message)
+                messagebox.showinfo("Copied", "Message copied to clipboard!")
+            except Exception as e:
+                messagebox.showerror("Copy Error", f"Failed to copy to clipboard:\n{e}")
+        
+        def select_all():
+            """Select all available cells"""
+            for var in cell_states.values():
+                var.set(True)
+            # Update cell appearance
+            for widget in timetable_inner.winfo_children():
+                if isinstance(widget, tk.Label) and widget.cget('bg') == '#FFB6C6':
+                    widget.config(bg='#90EE90', fg='#006400', text="✓")
+            update_message()
+        
+        def deselect_all():
+            """Deselect all available cells"""
+            for var in cell_states.values():
+                var.set(False)
+            # Update cell appearance
+            for widget in timetable_inner.winfo_children():
+                if isinstance(widget, tk.Label) and widget.cget('bg') == '#90EE90':
+                    widget.config(bg='#FFB6C6', fg='#8B0000', text="✗")
+            update_message()
+        
+        ttk.Button(button_frame, text="Copy to Clipboard", command=copy_to_clipboard).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Select All", command=select_all).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Deselect All", command=deselect_all).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Close", command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
 
 
 def main():
