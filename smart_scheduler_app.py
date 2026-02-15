@@ -12,6 +12,27 @@ import win32com.client
 import time
 import pyperclip
 
+# Import display preferences
+try:
+    from display_preferences import (
+        initialize as init_display_prefs,
+        get_show_names,
+        set_show_names,
+        register_callback,
+        format_location_raw
+    )
+    DISPLAY_PREFS_AVAILABLE = True
+    print("[DEBUG] display_preferences imported successfully")
+except ImportError as e:
+    DISPLAY_PREFS_AVAILABLE = False
+    print(f"[DEBUG] Failed to import display_preferences: {e}")
+    # Create stub functions so the code doesn't crash
+    def init_display_prefs(dir): pass
+    def get_show_names(): return False
+    def set_show_names(val): pass
+    def register_callback(func): pass
+    def format_location_raw(postcode, name, show_names): return postcode
+
 # Outlook Category Colors Enumeration (OlCategoryColor)
 OUTLOOK_COLORS = {
     0: "None",
@@ -85,6 +106,21 @@ class SmartSchedulerApp:
         else:
             self.appointments_csv = None
         
+        # Initialize display preferences
+        if DISPLAY_PREFS_AVAILABLE:
+            try:
+                print(f"[DEBUG] Initializing display preferences for {self.project_dir}")
+                init_display_prefs(self.project_dir if self.project_dir else os.getcwd())
+                register_callback(self.on_display_preference_changed)
+                print("[DEBUG] Display preferences initialized and callback registered")
+            except Exception as e:
+                print(f"[DEBUG] Warning: Could not initialize display preferences: {e}")
+        else:
+            print("[DEBUG] DISPLAY_PREFS_AVAILABLE is False")
+        
+        # Display preference UI variable
+        self.show_names_var = tk.BooleanVar(value=False)
+        
         self.setup_ui()
         
         # Load project data if available
@@ -101,6 +137,89 @@ class SmartSchedulerApp:
             hours = minutes // 60
             mins = minutes % 60
             self.time_slots.append(f"{hours}:{mins:02d}")
+    
+    def toggle_display_preference(self):
+        """Toggle between showing names and postcodes"""
+        try:
+            current = get_show_names()
+            set_show_names(not current)
+            self.update_toggle_button_text()
+            self.update_all_displays()
+        except:
+            pass
+    
+    def update_toggle_button_text(self):
+        """Update toggle button text based on current preference"""
+        if hasattr(self, 'toggle_btn'):
+            try:
+                if get_show_names():
+                    self.toggle_btn.config(text="Show Postcodes")
+                else:
+                    self.toggle_btn.config(text="Show Names")
+            except:
+                self.toggle_btn.config(text="Display Mode")
+    
+    def on_display_preference_changed(self, show_names):
+        """Callback when display preference changes from another app"""
+        self.show_names_var.set(show_names)
+        self.update_toggle_button_text()
+        self.update_all_displays()
+    
+    def format_postcode_display(self, postcode, client_name=None):
+        """Format postcode/location for display based on preference.
+        If client_name doesn't exist, postcode is shown instead.
+        Returns tuple of (display_text, is_using_name)
+        """
+        if not DISPLAY_PREFS_AVAILABLE:
+            return (postcode, False)
+        
+        if get_show_names() and client_name:
+            return (str(client_name), True)
+        else:
+            return (str(postcode), False)
+    
+    def get_location_display(self, postcode):
+        """Get formatted location for display from a postcode
+        Looks up client_name in clustered_regions_df if available
+        Returns the formatted display string"""
+        if self.clustered_regions_df is None:
+            return self.format_postcode_display(postcode)[0]
+        
+        postcode_row = self.clustered_regions_df[self.clustered_regions_df['postcode'] == postcode]
+        if len(postcode_row) > 0:
+            row = postcode_row.iloc[0]
+            client_name = row.get('client_name', None) if hasattr(row, 'get') else (row['client_name'] if 'client_name' in row.index else None)
+            if client_name and pd.notna(client_name):
+                client_name = str(client_name).strip()
+                if not client_name:
+                    client_name = None
+            else:
+                client_name = None
+            return self.format_postcode_display(postcode, client_name)[0]
+        
+        return self.format_postcode_display(postcode)[0]
+    
+    def update_all_displays(self):
+        """Update all postcode displays after preference change"""
+        try:
+            # Update postcode combobox
+            if self.selected_region and self.clustered_regions_df is not None:
+                region_data = self.clustered_regions_df[self.clustered_regions_df['region'] == self.selected_region]
+                self.region_postcodes = sorted(region_data['postcode'].unique().tolist())
+                display_list = []
+                for pc in self.region_postcodes:
+                    row = region_data[region_data['postcode'] == pc].iloc[0] if len(region_data[region_data['postcode'] == pc]) > 0 else None
+                    if row is not None and 'client_name' in region_data.columns:
+                        display_text = self.format_postcode_display(pc, row.get('client_name'))[0]
+                    else:
+                        display_text = self.format_postcode_display(pc)[0]
+                    display_list.append(display_text)
+                self.postcode_combo['values'] = display_list
+            
+            # Redraw timetable
+            self.update_timetable()
+        except Exception as e:
+            print(f"Error updating displays: {e}")
     
     def show_info_dialog(self, title, message):
         """Show an info dialog that stays on top of the main window"""
@@ -287,6 +406,12 @@ class SmartSchedulerApp:
         title_label = ttk.Label(title_frame, text="Smart Scheduler", 
                                font=('Arial', 18, 'bold'))
         title_label.pack(side=tk.LEFT)
+        
+        # Add toggle button on the right
+        self.toggle_btn = ttk.Button(title_frame, text="Show Postcodes", 
+                                    command=self.toggle_display_preference, width=18)
+        self.toggle_btn.pack(side=tk.RIGHT, padx=(10, 0))
+        self.update_toggle_button_text()
         
         # Selection frame
         selection_frame = ttk.LabelFrame(main_frame, text="Selection", padding="10")
@@ -582,7 +707,24 @@ class SmartSchedulerApp:
         if self.clustered_regions_df is not None:
             region_data = self.clustered_regions_df[self.clustered_regions_df['region'] == region_id]
             self.region_postcodes = sorted(region_data['postcode'].unique().tolist())
-            self.postcode_combo['values'] = self.region_postcodes
+            
+            # Format display with names or postcodes
+            display_list = []
+            for pc in self.region_postcodes:
+                pc_row = region_data[region_data['postcode'] == pc]
+                if len(pc_row) > 0:
+                    client_name = pc_row.iloc[0].get('client_name', None) if hasattr(pc_row.iloc[0], 'get') else (pc_row.iloc[0]['client_name'] if 'client_name' in pc_row.iloc[0] else None)
+                    if client_name and pd.notna(client_name):
+                        client_name = str(client_name).strip()
+                        if not client_name:
+                            client_name = None
+                    else:
+                        client_name = None
+                    display_list.append(self.get_location_display(pc))
+                else:
+                    display_list.append(self.get_location_display(pc))
+            
+            self.postcode_combo['values'] = display_list
             if self.region_postcodes:
                 self.postcode_combo.current(0)
         
@@ -834,18 +976,21 @@ class SmartSchedulerApp:
                     # Appointment cell - check if confirmed or pending
                     postcode = self.appointments[cell_key]
                     
+                    # Format display with name or postcode
+                    display_postcode = self.get_location_display(postcode)
+                    
                     # Get duration - use stored duration for confirmed appointments, current setting for pending
                     if postcode in self.confirmed_appointments:
                         bg_color = '#90EE90'  # Light green for confirmed
                         # Get stored duration from confirmed appointments
                         _, _, duration_minutes, in_outlook = self.confirmed_appointments[postcode]
                         # Add email indicator if synced to Outlook
-                        display_text = f"{postcode} ✉" if in_outlook else postcode
+                        display_text = f"{display_postcode} ✉" if in_outlook else display_postcode
                     else:
                         bg_color = '#228B22'  # Forest green for pending (darker)
                         # Use current duration setting for pending appointments
                         duration_minutes = int(self.appointment_duration_var.get())
-                        display_text = postcode
+                        display_text = display_postcode
                     
                     # Calculate columnspan based on appointment duration (30-minute slots)
                     columnspan = duration_minutes // 30  # Each column is 30 minutes
@@ -994,11 +1139,12 @@ class SmartSchedulerApp:
                 return
         
         # Get selected postcode
-        postcode = self.postcode_var.get().strip().upper()
-        
-        if not postcode:
+        selected_index = self.postcode_combo.current()
+        if selected_index < 0 or selected_index >= len(self.region_postcodes):
             self.show_warning_dialog("No Postcode Selected", "Please select a postcode first.")
             return
+        
+        postcode = self.region_postcodes[selected_index]
         
         # VALIDATION: Check if this postcode already has a confirmed appointment
         if postcode in self.confirmed_appointments:
@@ -1166,10 +1312,39 @@ class SmartSchedulerApp:
         if is_exceeding_end:
             self.conflicting_segments.add((date_str, last_end_minutes, travel_home_end))
     
+    def display_text_to_postcode(self, display_text):
+        """Convert display text (name or postcode) to actual postcode for lookups"""
+        if not display_text or self.clustered_regions_df is None:
+            return display_text
+        
+        display_text = display_text.strip().upper()
+        
+        # Check if it's already a postcode
+        postcode_match = self.clustered_regions_df[
+            self.clustered_regions_df['postcode'].str.upper() == display_text
+        ]
+        if not postcode_match.empty:
+            return display_text
+        
+        # Check if it's a client name
+        if 'client_name' in self.clustered_regions_df.columns:
+            name_match = self.clustered_regions_df[
+                self.clustered_regions_df['client_name'].str.upper() == display_text
+            ]
+            if not name_match.empty:
+                return name_match.iloc[0]['postcode'].strip().upper()
+        
+        # Return as-is if no match found
+        return display_text
+    
     def get_travel_time(self, origin, destination):
         """Get travel time between two postcodes"""
         if not origin or not destination or self.distances_df is None:
             return 30  # Default 30 minutes
+        
+        # Convert display text (names) to postcodes
+        origin = self.display_text_to_postcode(origin)
+        destination = self.display_text_to_postcode(destination)
         
         # Normalize postcodes
         origin = origin.strip().upper()
@@ -1328,8 +1503,9 @@ class SmartSchedulerApp:
     
     def on_postcode_selected(self, event=None):
         """Handle postcode selection - update travel times display"""
-        postcode = self.postcode_var.get()
-        if postcode:
+        selected_index = self.postcode_combo.current()
+        if selected_index >= 0 and selected_index < len(self.region_postcodes):
+            postcode = self.region_postcodes[selected_index]
             self.display_travel_times(postcode)
             # Also update the map to highlight the selected postcode
             self.update_region_visualization()
@@ -1528,9 +1704,12 @@ class SmartSchedulerApp:
         
         date, time, postcode, duration = self.pending_appointment
         
+        # Convert display text to actual postcode for storage
+        actual_postcode = self.display_text_to_postcode(postcode)
+        
         # Validation: Check if this postcode already has a confirmed appointment
-        if postcode in self.confirmed_appointments:
-            existing_date, existing_time, existing_duration, _ = self.confirmed_appointments[postcode]
+        if actual_postcode in self.confirmed_appointments:
+            existing_date, existing_time, existing_duration, _ = self.confirmed_appointments[actual_postcode]
             self.show_error_dialog(
                 "Duplicate Location", 
                 f"Location {postcode} already has a confirmed appointment on {existing_date} at {existing_time}.\\n\\nOnly 1 appointment per location is allowed."
@@ -1549,7 +1728,7 @@ class SmartSchedulerApp:
         if add_to_outlook:
             try:
                 outlook = win32com.client.Dispatch("Outlook.Application")
-                color_code = self.get_region_color_for_postcode(postcode)
+                color_code = self.get_region_color_for_postcode(actual_postcode)
                 color_name = OUTLOOK_COLORS.get(color_code, "Red")
                 category_name = f"Appointment - {color_name}"
                 outlook_success = self.create_outlook_appointment(outlook, postcode, date, time, duration, category_name, color_code)
@@ -1557,13 +1736,13 @@ class SmartSchedulerApp:
                 self.show_error_dialog("Outlook Error", f"Failed to create Outlook appointment:\\n{e}")
                 outlook_success = False
         
-        # Save to confirmed appointments (with outlook status)
-        self.confirmed_appointments[postcode] = (date, time, duration, outlook_success if add_to_outlook else False)
+        # Save to confirmed appointments (with outlook status) using actual postcode
+        self.confirmed_appointments[actual_postcode] = (date, time, duration, outlook_success if add_to_outlook else False)
         
-        # Add to CSV
+        # Add to CSV using actual postcode
         df = pd.read_csv(self.appointments_csv)
         new_row = pd.DataFrame([{
-            'postcode': postcode, 
+            'postcode': actual_postcode, 
             'date': date, 
             'time': time, 
             'duration': duration,

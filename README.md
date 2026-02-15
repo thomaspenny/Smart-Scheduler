@@ -189,23 +189,71 @@ Each project creates the following files:
 
 ### locations.csv
 
-The primary input file should contain location data in one of these formats:
+The primary input file for your project. This file is required to get started.
 
-**Option 1: Postcode only**
+**Required Format:**
+
 ```
-Postcode
-SW1A 1AA
-W1A 0AX
-EC1A 1BB
+postcode,client_name
+PE27 5BH,Ingrid Isbister
+CM23 2JT,Lewis Lewisham
+CM3 4NQ,Mark Mason
+CM6 1AE,Omar O'Malley
+CO15 3DT,Adam Adams
+EN11 8FN,Bob Baker
+IP33 1UZ,Charlie Carter
+SG2 9XU,George Graham
 ```
 
-**Option 2: Postcode with customer name**
+**Important Notes:**
+
+- **Header row is required**: The first row MUST be `postcode,client_name`
+- **Postcode column must come first**: Always put postcode before client_name
+- **UK postcode format**: Postcodes should be valid UK postcodes (e.g., PE27 5BH, CM23 2JT)
+- **Client names are optional but recommended**: Names enable the Global Display Toggle feature
+- **No quotes needed**: Data should not be wrapped in quotes
+- **One entry per row**: Each location gets its own row
+
+**Global Display Toggle Feature:**
+
+Once your project is created and data is processed through the applications, you can toggle between:
+- Displaying **customer names** (readable, business-friendly)
+- Displaying **postcodes** (location-specific, for route planning)
+
+This toggle applies **globally across all applications** (Postcode Distance App, TSP Clustering, Calendar Organizer, and Smart Scheduler) and persists across sessions.
+
+**Example locations.csv file:**
+
+```csv
+postcode,client_name
+CO15 3DT,Adam Adams
+EN11 8FN,Bob Baker
+IP33 1UZ,Charlie Carter
+NN16 0EF,Duke Dutton
+MK16 0AG,Euain Ewanson
+PE21 7QR,Frankie Fritz
+SG2 9XU,George Graham
+PE9 1PJ,Hank Harrison
+PE27 5BH,Ingrid Isbister
+HP23 5BN,Jack Johnson
 ```
-Postcode,Name
-SW1A 1AA,Customer A
-W1A 0AX,Customer B
-EC1A 1BB,Customer C
+
+**If you only have postcodes (no names):**
+
+You can still use the application, but the Global Display Toggle will not provide any visual difference. Consider adding customer names for better usability.
+
+```csv
+postcode,client_name
+SW1A 1AA,
+W1A 0AX,
+EC1A 1BB,
 ```
+
+**Acceptable postcode formats:**
+
+- Standard UK: `PE27 5BH`, `CM23 2JT`, `SG2 9XU`
+- All uppercase or mixed case: Both `PE27 5BH` and `pe27 5bh` are accepted
+- The app will normalize postcodes to uppercase automatically
 
 ## Configuration Options
 

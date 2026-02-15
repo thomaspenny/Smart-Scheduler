@@ -8,6 +8,13 @@ from itertools import combinations
 import os
 import sys
 
+# Import display preferences
+try:
+    from display_preferences import initialize as init_display_prefs
+    DISPLAY_PREFS_AVAILABLE = True
+except ImportError:
+    DISPLAY_PREFS_AVAILABLE = False
+
 
 class PostcodeDistanceApp:
     def __init__(self, root, project_dir=None):
@@ -22,6 +29,14 @@ class PostcodeDistanceApp:
         self.input_file = None
         self.output_dir = None
         self.postcodes = []
+        self.postcode_names = {}  # Map postcode -> client_name
+        
+        # Initialize display preferences
+        if DISPLAY_PREFS_AVAILABLE:
+            try:
+                init_display_prefs(self.project_dir if self.project_dir else os.getcwd())
+            except Exception as e:
+                print(f"Warning: Could not initialize display preferences: {e}")
         
         self.setup_ui()
         
@@ -118,6 +133,16 @@ class PostcodeDistanceApp:
                         self.log(f"✓ Renamed first column to 'postcode'")
                 
                 self.postcodes = df['postcode'].dropna().str.strip().unique().tolist()
+                
+                # Store client names if available
+                if 'client_name' in df.columns:
+                    for _, row in df.iterrows():
+                        postcode = str(row['postcode']).strip()
+                        client_name = row['client_name'] if pd.notna(row['client_name']) else None
+                        if client_name:
+                            self.postcode_names[postcode] = str(client_name).strip()
+                    self.log(f"✓ Loaded client names for {len(self.postcode_names)} locations")
+                
                 self.log(f"✓ Loaded {len(self.postcodes)} unique postcodes")
                 self.log(f"\n✓ Project '{project_name}' loaded successfully")
                 
@@ -203,10 +228,20 @@ class PostcodeDistanceApp:
             
             # Save coordinates file as distance_matrix.csv
             coords_output = os.path.join(self.output_dir, "distance_matrix.csv")
-            postcode_list_df = pd.DataFrame([
-                {'postcode': pc, 'latitude': coords['latitude'], 'longitude': coords['longitude']}
-                for pc, coords in sorted(postcode_coords.items())
-            ])
+            postcode_data = []
+            for pc in sorted(postcode_coords.keys()):
+                coords = postcode_coords[pc]
+                row = {
+                    'postcode': pc, 
+                    'latitude': coords['latitude'], 
+                    'longitude': coords['longitude']
+                }
+                # Add client_name if available
+                if pc in self.postcode_names:
+                    row['client_name'] = self.postcode_names[pc]
+                postcode_data.append(row)
+            
+            postcode_list_df = pd.DataFrame(postcode_data)
             postcode_list_df.to_csv(coords_output, index=False)
             self.log(f"✓ Saved coordinates to: {coords_output}")
             

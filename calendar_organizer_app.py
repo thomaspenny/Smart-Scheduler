@@ -8,6 +8,23 @@ from datetime import datetime, timedelta
 import win32com.client
 import time
 
+# Import display preferences
+try:
+    from display_preferences import (
+        initialize as init_display_prefs,
+        get_show_names,
+        set_show_names,
+        register_callback
+    )
+    DISPLAY_PREFS_AVAILABLE = True
+except ImportError:
+    DISPLAY_PREFS_AVAILABLE = False
+    # Create stub functions so the code doesn't crash
+    def init_display_prefs(dir): pass
+    def get_show_names(): return False
+    def set_show_names(val): pass
+    def register_callback(func): pass
+
 # Outlook Category Colors Enumeration (OlCategoryColor)
 # All 25 available colors in Outlook
 OUTLOOK_COLORS = {
@@ -59,6 +76,14 @@ class CalendarOrganizerApp:
         self.current_month = datetime.now().month
         self.current_year = datetime.now().year
         
+        # Initialize display preferences
+        if DISPLAY_PREFS_AVAILABLE:
+            try:
+                init_display_prefs(self.project_dir if self.project_dir else os.getcwd())
+                register_callback(self.on_display_preference_changed)
+            except Exception as e:
+                print(f"Warning: Could not initialize display preferences: {e}")
+        
         self.setup_ui()
         
         # Auto-load project if provided
@@ -67,6 +92,57 @@ class CalendarOrganizerApp:
         
         # Set close protocol
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+    
+    def toggle_display_preference(self):
+        """Toggle between showing names and postcodes"""
+        try:
+            current = get_show_names()
+            set_show_names(not current)
+            self.update_toggle_button_text()
+            self.refresh_postcodes_display()
+        except:
+            pass
+    
+    def update_toggle_button_text(self):
+        """Update toggle button text based on current preference"""
+        if hasattr(self, 'toggle_btn'):
+            try:
+                if get_show_names():
+                    self.toggle_btn.config(text="Show Postcodes")
+                else:
+                    self.toggle_btn.config(text="Show Names")
+            except:
+                self.toggle_btn.config(text="Display Mode")
+    
+    def on_display_preference_changed(self, show_names):
+        """Callback when display preference changes from another app"""
+        self.update_toggle_button_text()
+        self.refresh_postcodes_display()
+    
+    def refresh_postcodes_display(self):
+        """Refresh the postcodes display with current preference"""
+        if self.selected_region and self.selected_region in self.region_data:
+            self.postcodes_text.config(state=tk.NORMAL)
+            self.postcodes_text.delete('1.0', tk.END)
+            
+            region_info = self.region_data[self.selected_region]
+            
+            # Get display format
+            if DISPLAY_PREFS_AVAILABLE and get_show_names() and 'client_names' in region_info:
+                # Show names if available
+                display_items = []
+                for i, postcode in enumerate(region_info['postcodes']):
+                    if i < len(region_info['client_names']) and region_info['client_names'][i]:
+                        display_items.append(region_info['client_names'][i])
+                    else:
+                        display_items.append(postcode)
+                display_str = ', '.join(display_items)
+            else:
+                # Show postcodes
+                display_str = ', '.join(region_info['postcodes'])
+            
+            self.postcodes_text.insert('1.0', display_str)
+            self.postcodes_text.config(state=tk.DISABLED)
     
     def setup_ui(self):
         # Main container
@@ -85,6 +161,12 @@ class CalendarOrganizerApp:
         ttk.Button(button_bar, text="Save Schedule", command=self.save_schedule, width=15).pack(side=tk.LEFT, padx=2)
         ttk.Button(button_bar, text="Reload Schedule", command=self.load_schedule, width=15).pack(side=tk.LEFT, padx=2)
         ttk.Button(button_bar, text="Export to Outlook", command=self.export_to_outlook, width=18).pack(side=tk.LEFT, padx=2)
+        
+        # Add toggle button on the right
+        self.toggle_btn = ttk.Button(button_bar, text="Show Postcodes", 
+                                    command=self.toggle_display_preference, width=18)
+        self.toggle_btn.pack(side=tk.RIGHT, padx=(10, 0))
+        self.update_toggle_button_text()
         
         # Left panel - Region selection
         left_panel = ttk.LabelFrame(main_frame, text="Regions", padding="10")
@@ -234,6 +316,20 @@ class CalendarOrganizerApp:
                 customer_count = len(region_customers)
                 postcodes = sorted(region_customers['postcode'].tolist())
                 
+                # Get client names if available
+                client_names = []
+                if 'client_name' in region_customers.columns:
+                    for pc in postcodes:
+                        pc_row = region_customers[region_customers['postcode'] == pc]
+                        if len(pc_row) > 0:
+                            client_name = pc_row.iloc[0]['client_name']
+                            if client_name and pd.notna(client_name):
+                                client_names.append(str(client_name).strip())
+                            else:
+                                client_names.append(None)
+                        else:
+                            client_names.append(None)
+                
                 # Get custom name or default
                 region_name = region_names.get(region_num, f"Region {region_num}")
                 region_color = region_colors.get(region_num, 1)  # Default to Red (1)
@@ -243,6 +339,7 @@ class CalendarOrganizerApp:
                 self.region_data[region_num] = {
                     'name': region_name,
                     'postcodes': postcodes,
+                    'client_names': client_names if client_names else [None] * len(postcodes),
                     'count': customer_count,
                     'color_code': region_color,  # Store color code for calendar appointments
                     'minimum_days': min_days  # Store minimum days
@@ -292,14 +389,8 @@ class CalendarOrganizerApp:
                     foreground="blue", font=('Arial', 9, 'bold')
                 )
             
-            # Display postcodes
-            self.postcodes_text.config(state=tk.NORMAL)
-            self.postcodes_text.delete('1.0', tk.END)
-            
-            postcodes = region_info['postcodes']
-            postcodes_str = ', '.join(postcodes)
-            self.postcodes_text.insert('1.0', postcodes_str)
-            self.postcodes_text.config(state=tk.DISABLED)
+            # Use the refresh method to display postcodes
+            self.refresh_postcodes_display()
     
     def update_calendar_display(self):
         """Update the calendar display for current month/year"""

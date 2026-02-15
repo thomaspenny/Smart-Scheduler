@@ -12,6 +12,30 @@ import threading
 import os
 import sys
 
+# Import display preferences
+try:
+    from display_preferences import (
+        initialize as init_display_prefs,
+        get_show_names,
+        set_show_names,
+        register_callback
+    )
+    DISPLAY_PREFS_AVAILABLE = True
+except ImportError as e:
+    DISPLAY_PREFS_AVAILABLE = False
+    # Create stub functions so the code doesn't crash
+    def init_display_prefs(dir): pass
+    def get_show_names(): return False
+    def set_show_names(val): pass
+    def register_callback(func): pass
+except Exception as e:
+    DISPLAY_PREFS_AVAILABLE = False
+    # Create stub functions so the code doesn't crash
+    def init_display_prefs(dir): pass
+    def get_show_names(): return False
+    def set_show_names(val): pass
+    def register_callback(func): pass
+
 # Outlook Category Colors Enumeration (OlCategoryColor)
 # All 25 available colors in Outlook
 OUTLOOK_COLORS = {
@@ -83,6 +107,14 @@ class TSPClusteringApp:
         # Store region colors (Outlook color codes)
         self.region_colors = {}  # {region_number: color_index}
         
+        # Initialize display preferences
+        if DISPLAY_PREFS_AVAILABLE:
+            try:
+                init_display_prefs(self.project_dir if self.project_dir else os.getcwd())
+                register_callback(self.on_display_preference_changed)
+            except Exception as e:
+                print(f"Warning: Could not initialize display preferences: {e}")
+        
         self.setup_ui()
         
         # Auto-load project files if project directory provided
@@ -113,6 +145,13 @@ class TSPClusteringApp:
         self.edit_btn = ttk.Button(button_bar, text="Edit Regions", command=self.show_edit_regions_dialog, width=12, state=tk.DISABLED)
         self.edit_btn.pack(side=tk.LEFT, padx=2)
         self.rename_color_btn = ttk.Button(button_bar, text="Rename/Recolor", command=self.show_rename_recolor_dialog, width=15, state=tk.DISABLED)
+        self.rename_color_btn.pack(side=tk.LEFT, padx=2)
+        
+        # Add toggle button on the right
+        self.toggle_btn = ttk.Button(button_bar, text="Show Postcodes", 
+                                    command=self.toggle_display_preference, width=18)
+        self.toggle_btn.pack(side=tk.RIGHT, padx=(10, 0))
+        self.update_toggle_button_text()
         self.rename_color_btn.pack(side=tk.LEFT, padx=2)
         self.view_btn = ttk.Button(button_bar, text="Analytics", command=self.show_log_window, width=12)
         self.view_btn.pack(side=tk.LEFT, padx=2)
@@ -184,6 +223,60 @@ class TSPClusteringApp:
         if self.log_window:
             self.log_window.destroy()
         self.root.destroy()
+    
+    def toggle_display_preference(self):
+        """Toggle between showing names and postcodes"""
+        print("[DEBUG] Toggle button clicked!")
+        try:
+            current = get_show_names()
+            print(f"[DEBUG] Current preference: show_names = {current}")
+            new_value = not current
+            set_show_names(new_value)
+            print(f"[DEBUG] New preference set to: {new_value}")
+            self.update_toggle_button_text()
+            print("[DEBUG] Toggle button text updated")
+        except Exception as e:
+            print(f"[DEBUG] Error in toggle_display_preference: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def update_toggle_button_text(self):
+        """Update toggle button text based on current preference"""
+        print("[DEBUG] update_toggle_button_text called")
+        if hasattr(self, 'toggle_btn'):
+            try:
+                show_names = get_show_names()
+                print(f"[DEBUG] get_show_names() returned: {show_names}")
+                if show_names:
+                    self.toggle_btn.config(text="Show Postcodes")
+                    print("[DEBUG] Button set to 'Show Postcodes'")
+                else:
+                    self.toggle_btn.config(text="Show Names")
+                    print("[DEBUG] Button set to 'Show Names'")
+            except Exception as e:
+                print(f"[DEBUG] Error updating button text: {e}")
+                self.toggle_btn.config(text="Display Mode")
+        else:
+            print("[DEBUG] toggle_btn attribute not found!")
+    
+    def on_display_preference_changed(self, show_names):
+        """Callback when display preference changes from another app"""
+        self.update_toggle_button_text()
+        # Redraw visualization if we have results loaded
+        if self.has_results and hasattr(self, 'coords'):
+            try:
+                customer_names = getattr(self, 'customer_names', [None] * len(self.customer_postcodes))
+                self.create_visualization(
+                    self.coords, 
+                    self.labels, 
+                    self.depot, 
+                    self.n_clusters,
+                    self.customer_postcodes,
+                    customer_names,
+                    self.depot_postcode
+                )
+            except Exception as e:
+                print(f"Error redrawing visualization: {e}")
     
     def auto_load_project_files(self):
         """Auto-load files from project directory"""
@@ -450,6 +543,7 @@ class TSPClusteringApp:
             self.depot = depot
             self.n_clusters = n_clusters
             self.customer_postcodes = customer_postcodes
+            self.customer_names = customers_df['client_name'].tolist() if 'client_name' in customers_df.columns else [None] * len(customer_postcodes)
             self.depot_postcode = depot_postcode
             
             # Prepare results for potential saving
@@ -498,7 +592,8 @@ class TSPClusteringApp:
             
             # Create visualization
             self.log("\nGenerating visualization...")
-            self.create_visualization(coords, labels, depot, n_clusters, customer_postcodes, depot_postcode)
+            customer_names = self.customer_names if hasattr(self, 'customer_names') else [None] * len(customer_postcodes)
+            self.create_visualization(coords, labels, depot, n_clusters, customer_postcodes, customer_names, depot_postcode)
             
             self.update_status("Previous clustering loaded", "green")
             self.log("="*80)
@@ -850,6 +945,7 @@ class TSPClusteringApp:
             self.depot = depot
             self.n_clusters = actual_regions
             self.customer_postcodes = customer_postcodes
+            self.customer_names = customers_df['client_name'].tolist() if 'client_name' in customers_df.columns else [None] * len(customer_postcodes)
             self.depot_postcode = depot_postcode
             self.driving_time_matrix = driving_time_matrix
             self.customer_postcode_to_idx = customer_postcode_to_idx
@@ -869,7 +965,8 @@ class TSPClusteringApp:
             
             # Create visualization
             self.log("\nGenerating visualization...")
-            self.root.after(0, lambda: self.create_visualization(coords, labels, depot, actual_regions, customer_postcodes, depot_postcode))
+            customer_names = self.customer_names
+            self.root.after(0, lambda: self.create_visualization(coords, labels, depot, actual_regions, customer_postcodes, customer_names, depot_postcode))
             
             self.log(f"✓ Visualization displayed in GUI")
             
@@ -1324,7 +1421,7 @@ class TSPClusteringApp:
         # Clear the stored labels
         self._region_labels_to_draw = []
             
-    def create_visualization(self, coords, labels, depot, n_clusters, customer_postcodes, depot_postcode):
+    def create_visualization(self, coords, labels, depot, n_clusters, customer_postcodes, customer_names, depot_postcode):
         """Create visualization of clusters with postcode labels embedded in GUI"""
         # Initialize region labels list
         self._region_labels_to_draw = []
@@ -1400,7 +1497,15 @@ class TSPClusteringApp:
                       label=f'Excluded ({np.sum(excluded_mask)} locations)')
         
         # Add postcode labels for customer locations
+        show_names = get_show_names()
         for idx, (coord, postcode) in enumerate(zip(coords, customer_postcodes)):
+            # Determine what to display
+            customer_name = customer_names[idx] if idx < len(customer_names) else None
+            if show_names and customer_name:
+                display_text = customer_name
+            else:
+                display_text = postcode
+            
             # Different styling for excluded postcodes
             if labels[idx] == -1:
                 bbox_style = dict(boxstyle='round,pad=0.3', facecolor='lightgray', 
@@ -1409,7 +1514,7 @@ class TSPClusteringApp:
                 bbox_style = dict(boxstyle='round,pad=0.3', facecolor='white', 
                                 edgecolor='gray', alpha=0.7)
             
-            ax.annotate(postcode, 
+            ax.annotate(display_text, 
                        xy=(coord[1], coord[0]),
                        xytext=(3, 3),  # Offset by 3 points
                        textcoords='offset points',
@@ -1720,12 +1825,14 @@ class TSPClusteringApp:
     def refresh_visualization(self):
         """Refresh the visualization after manual edits"""
         # Create updated visualization with modified labels
+        customer_names = getattr(self, 'customer_names', [None] * len(self.customer_postcodes))
         self.create_visualization(
             self.coords, 
             self.labels, 
             self.depot, 
             self.n_clusters, 
             self.customer_postcodes, 
+            customer_names,
             self.depot_postcode
         )
         self.log("✓ Visualization refreshed with manual edits")
