@@ -817,6 +817,7 @@ class SmartSchedulerApp:
             
             # Get color for this date
             color = date_colors[date_idx % len(date_colors)]
+            label_added = False
             
             # Draw line from home to first appointment
             if home_coords and len(postcodes_ordered) > 0:
@@ -825,7 +826,9 @@ class SmartSchedulerApp:
                 if len(first_loc) > 0:
                     x1, y1 = home_coords
                     x2, y2 = first_loc.iloc[0]['longitude'], first_loc.iloc[0]['latitude']
-                    self.ax.plot([x1, x2], [y1, y2], color=color, linewidth=2, alpha=0.5, linestyle='--', zorder=2)
+                    self.ax.plot([x1, x2], [y1, y2], color=color, linewidth=2, alpha=0.5, linestyle='--', zorder=2,
+                                 label=date if not label_added else None)
+                    label_added = True
             
             # Draw lines between consecutive appointments
             for i in range(len(postcodes_ordered) - 1):
@@ -838,7 +841,9 @@ class SmartSchedulerApp:
                 if len(loc1) > 0 and len(loc2) > 0:
                     x1, y1 = loc1.iloc[0]['longitude'], loc1.iloc[0]['latitude']
                     x2, y2 = loc2.iloc[0]['longitude'], loc2.iloc[0]['latitude']
-                    self.ax.plot([x1, x2], [y1, y2], color=color, linewidth=2, alpha=0.7, zorder=2, label=date)
+                    self.ax.plot([x1, x2], [y1, y2], color=color, linewidth=2, alpha=0.7, zorder=2,
+                                 label=date if not label_added else None)
+                    label_added = True
             
             # Draw line from last appointment back to home
             if home_coords and len(postcodes_ordered) > 0:
@@ -847,7 +852,8 @@ class SmartSchedulerApp:
                 if len(last_loc) > 0:
                     x1, y1 = last_loc.iloc[0]['longitude'], last_loc.iloc[0]['latitude']
                     x2, y2 = home_coords
-                    self.ax.plot([x1, x2], [y1, y2], color=color, linewidth=2, alpha=0.5, linestyle='--', zorder=2)
+                    self.ax.plot([x1, x2], [y1, y2], color=color, linewidth=2, alpha=0.5, linestyle='--', zorder=2,
+                                 label=date if not label_added else None)
         
         # Plot locations - highlight differently for scheduled vs unscheduled
         scheduled_postcodes = set(self.confirmed_appointments.keys())
@@ -1569,9 +1575,42 @@ class SmartSchedulerApp:
             start_datetime = datetime(date_obj.year, date_obj.month, date_obj.day, hours, minutes)
             end_datetime = start_datetime + timedelta(minutes=duration_minutes)
             
+            # Get client name from clustered_regions_df
+            client_name = None
+            if self.clustered_regions_df is not None:
+                postcode_upper = postcode.strip().upper()
+                location_data = self.clustered_regions_df[self.clustered_regions_df['postcode'].str.upper() == postcode_upper]
+                if len(location_data) > 0 and 'client_name' in location_data.columns:
+                    client_name = location_data.iloc[0]['client_name']
+            
+            # Get region and list of all locations in that region
+            region_locations = ""
+            if self.clustered_regions_df is not None:
+                postcode_upper = postcode.strip().upper()
+                location_data = self.clustered_regions_df[self.clustered_regions_df['postcode'].str.upper() == postcode_upper]
+                if len(location_data) > 0 and 'region' in location_data.columns:
+                    region_num = int(location_data.iloc[0]['region'])
+                    region_data = self.clustered_regions_df[self.clustered_regions_df['region'] == region_num]
+                    
+                    # Build list of locations and names in the region
+                    locations_list = []
+                    for _, row in region_data.iterrows():
+                        pc = row['postcode'].strip().upper()
+                        name = row.get('client_name', '') if 'client_name' in row else ''
+                        name = str(name).strip() if name else ''
+                        locations_list.append(f"  • {pc}: {name}" if name else f"  • {pc}")
+                    
+                    region_locations = f"\nLocations in Region {region_num}:\n" + "\n".join(sorted(locations_list))
+            
             # Create appointment (1 = olAppointmentItem)
             appointment = outlook.CreateItem(1)
-            appointment.Subject = postcode  # Use postcode as title
+            
+            # Set subject with client name if available
+            if client_name and str(client_name).strip():
+                appointment.Subject = f"{postcode} - {client_name}"
+            else:
+                appointment.Subject = postcode
+            
             appointment.Start = start_datetime
             appointment.End = end_datetime
             appointment.AllDayEvent = False
@@ -1581,7 +1620,13 @@ class SmartSchedulerApp:
             appointment.ReminderMinutesBeforeStart = 30  # 30 minute reminder
             
             # Add useful info in the body
-            appointment.Body = f"Appointment at {postcode}\nDate: {date_str}\nTime: {time_str}\nDuration: {duration_minutes} minutes"
+            body_text = f"Appointment at {postcode}"
+            if client_name and str(client_name).strip():
+                body_text += f"\nClient: {client_name}"
+            body_text += f"\nDate: {date_str}\nTime: {time_str}\nDuration: {duration_minutes} minutes"
+            body_text += region_locations
+            
+            appointment.Body = body_text
             
             appointment.Save()
             return True

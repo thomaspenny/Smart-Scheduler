@@ -723,7 +723,7 @@ class CalendarOrganizerApp:
         except Exception as e:
             print(f"Error managing category '{category_name}': {e}")
     
-    def create_appointment(self, outlook, subject, start_time, category_name, color_index):
+    def create_appointment(self, outlook, subject, start_time, category_name, color_index, body_text=None):
         """Create an Outlook appointment for a region assignment"""
         try:
             # Ensure category exists with correct color
@@ -737,6 +737,8 @@ class CalendarOrganizerApp:
             appointment.BusyStatus = 0  # 0 = Free
             appointment.Categories = category_name
             appointment.ReminderSet = False  # No reminder
+            if body_text:
+                appointment.Body = body_text
             appointment.Save()
             
             return appointment
@@ -776,13 +778,34 @@ class CalendarOrganizerApp:
                 region_name = self.region_data[region_num]['name']
                 color_code, color_name = self.get_region_color_info(region_num)
                 
+                # Build body with list of locations and client names for this region
+                region_info = self.region_data[region_num]
+                postcodes = region_info.get('postcodes', [])
+                client_names = region_info.get('client_names', [])
+                locations_list = []
+                for idx, pc in enumerate(postcodes):
+                    name = None
+                    if idx < len(client_names):
+                        name = client_names[idx]
+                    if name:
+                        locations_list.append(f"  • {pc}: {name}")
+                    else:
+                        locations_list.append(f"  • {pc}")
+                locations_block = "\n".join(sorted(locations_list))
+                body_text = (
+                    f"Region: {region_name}\n"
+                    f"Date: {date_str}\n\n"
+                    f"Locations in this region:\n{locations_block}"
+                )
+
                 # Create appointment
                 appointment = self.create_appointment(
                     outlook=outlook,
                     subject=region_name,
                     start_time=date_str,
                     category_name=region_name,
-                    color_index=color_code
+                    color_index=color_code,
+                    body_text=body_text
                 )
                 
                 if appointment:

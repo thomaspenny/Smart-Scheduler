@@ -70,7 +70,7 @@ class ProjectLauncher:
             # Running as script
             self.app_directory = os.path.dirname(os.path.abspath(__file__))
         
-        self.config_file = os.path.join(self.app_directory, "launcher_config.txt")
+        self.config_file = os.path.join(self.app_directory, "launcher_config.json")
         
         # Load configuration
         self.config = self.load_config()

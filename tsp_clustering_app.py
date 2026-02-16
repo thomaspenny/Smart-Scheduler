@@ -134,12 +134,8 @@ class TSPClusteringApp:
         button_bar = ttk.Frame(main_frame)
         button_bar.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
         
-        self.reload_btn = ttk.Button(button_bar, text="Reload Files", command=self.load_previous_clustering, width=12)
-        self.reload_btn.pack(side=tk.LEFT, padx=2)
-        self.config_btn = ttk.Button(button_bar, text="Configure", command=self.show_config_menu, width=12)
+        self.config_btn = ttk.Button(button_bar, text="Create Regions", command=self.show_config_menu, width=18)
         self.config_btn.pack(side=tk.LEFT, padx=2)
-        self.run_btn = ttk.Button(button_bar, text="Run", command=self.show_run_menu, width=12)
-        self.run_btn.pack(side=tk.LEFT, padx=2)
         self.save_btn = ttk.Button(button_bar, text="Save Results", command=self.save_results, width=12, state=tk.DISABLED)
         self.save_btn.pack(side=tk.LEFT, padx=2)
         self.edit_btn = ttk.Button(button_bar, text="Edit Regions", command=self.show_edit_regions_dialog, width=12, state=tk.DISABLED)
@@ -187,9 +183,9 @@ class TSPClusteringApp:
                  font=('Arial', 20, 'bold')).pack(pady=50)
         ttk.Label(welcome_frame, text="Click the File button to load your data files", 
                  font=('Arial', 12)).pack(pady=10)
-        ttk.Label(welcome_frame, text="Configure clustering parameters with the Configure button", 
+        ttk.Label(welcome_frame, text="Configure clustering parameters with the Configure and Run button", 
                  font=('Arial', 12)).pack(pady=10)
-        ttk.Label(welcome_frame, text="Click Run button to start clustering analysis", 
+        ttk.Label(welcome_frame, text="Start clustering analysis from Configure and Run or Run", 
                  font=('Arial', 12)).pack(pady=10)
         
         # Progress Section at bottom
@@ -324,24 +320,6 @@ class TSPClusteringApp:
         """Show Configure dialog - directly open clustering parameters"""
         self.show_config_dialog()
     
-    def show_run_menu(self):
-        """Show Run dialog window"""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Run Options")
-        dialog.geometry("350x180")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        
-        frame = ttk.Frame(dialog, padding="20")
-        frame.pack(fill=tk.BOTH, expand=True)
-        
-        ttk.Label(frame, text="Run Operations", font=('Arial', 14, 'bold')).pack(pady=(0, 20))
-        
-        ttk.Button(frame, text="Run Clustering Analysis", command=self.start_clustering,
-                  width=30).pack(pady=5)
-        ttk.Button(frame, text="Reset Clustering", command=self.reset_clustering,
-                  width=30).pack(pady=5)
-    
     def show_config_dialog(self):
         """Show configuration dialog window"""
         dialog = tk.Toplevel(self.root)
@@ -385,10 +363,14 @@ class TSPClusteringApp:
         btn_frame = ttk.Frame(frame)
         btn_frame.grid(row=5, column=0, columnspan=2, pady=20)
         
-        ttk.Button(btn_frame, text="OK", command=dialog.destroy, 
-                  width=10).pack(side=tk.LEFT, padx=5)
+        def run_and_close():
+            dialog.destroy()
+            self.start_clustering()
+
+        ttk.Button(btn_frame, text="Create Regions", command=run_and_close, 
+              width=14).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Cancel", command=dialog.destroy, 
-                  width=10).pack(side=tk.LEFT, padx=5)
+              width=10).pack(side=tk.LEFT, padx=5)
     
     def show_log_window(self):
         """Show log window"""
@@ -1860,8 +1842,11 @@ class TSPClusteringApp:
                  font=('Arial', 9), foreground='gray').pack(pady=(0, 20))
         
         # Create scrollable frame for region entries
-        canvas = tk.Canvas(frame, height=400)
-        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
+        content_frame = ttk.Frame(frame)
+        content_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        canvas = tk.Canvas(content_frame, height=400)
+        scrollbar = ttk.Scrollbar(content_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas)
         
         scrollable_frame.bind(
@@ -1946,7 +1931,7 @@ class TSPClusteringApp:
             dialog.destroy()
         
         btn_frame = ttk.Frame(frame)
-        btn_frame.pack(pady=15)
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=15)
         
         ttk.Button(btn_frame, text="Apply Changes", command=apply_changes, width=15).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Cancel", command=dialog.destroy, width=15).pack(side=tk.LEFT, padx=5)
