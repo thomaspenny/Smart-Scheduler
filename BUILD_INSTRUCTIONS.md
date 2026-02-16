@@ -43,6 +43,9 @@ This will open a GUI in your web browser.
 - If you have an icon file (.ico), you can select it here
 
 #### Additional Files
+Add the Help HTML so the Help button can display it in the EXE:
+- Add Data: `help.html` → Destination: `.` (root of the bundled app)
+
 **DO NOT add the Python app files as "Additional Files"** - they will be imported directly into the EXE.
 
 #### Hidden Imports
@@ -76,12 +79,12 @@ Under "Advanced" tab:
 If you prefer command line, run this in PowerShell:
 
 ```bash
-pyinstaller --onefile --windowed --name="TSP_Project_Launcher" --hidden-import postcode_distance_app --hidden-import tsp_clustering_app --hidden-import calendar_organizer_app --hidden-import smart_scheduler_app --hidden-import pandas --hidden-import requests --hidden-import shapely --hidden-import sklearn --hidden-import scipy --hidden-import matplotlib --hidden-import win32com.client --hidden-import win32timezone -y project_launcher.py
+pyinstaller --onefile --windowed --name="TSP_Project_Launcher" --add-data "help.html;." --hidden-import postcode_distance_app --hidden-import tsp_clustering_app --hidden-import calendar_organizer_app --hidden-import smart_scheduler_app --hidden-import pandas --hidden-import requests --hidden-import shapely --hidden-import sklearn --hidden-import scipy --hidden-import matplotlib --hidden-import win32com.client --hidden-import win32timezone -y project_launcher.py
 ```
 
 **For testing/debugging**, use `--console` instead of `--windowed` to see debug output:
 ```bash
-pyinstaller --onefile --console --name="TSP_Project_Launcher_Debug" --hidden-import postcode_distance_app --hidden-import tsp_clustering_app --hidden-import calendar_organizer_app --hidden-import smart_scheduler_app --hidden-import pandas --hidden-import requests --hidden-import shapely --hidden-import sklearn --hidden-import scipy --hidden-import matplotlib --hidden-import win32com.client --hidden-import win32timezone -y project_launcher.py
+pyinstaller --onefile --console --name="TSP_Project_Launcher_Debug" --add-data "help.html;." --hidden-import postcode_distance_app --hidden-import tsp_clustering_app --hidden-import calendar_organizer_app --hidden-import smart_scheduler_app --hidden-import pandas --hidden-import requests --hidden-import shapely --hidden-import sklearn --hidden-import scipy --hidden-import matplotlib --hidden-import win32com.client --hidden-import win32timezone -y project_launcher.py
 ```
 
 **Important**: The app modules MUST be added as `--hidden-import` (not `--add-data`) so PyInstaller properly bundles them into the executable.
@@ -167,7 +170,7 @@ The EXE automatically includes:
 | One File | Yes (One File) |
 | Console Window | Window Based (hide console) |
 | Icon | Optional |
-| Additional Files | All 4 app .py files |
+| Additional Files | help.html |
 | Hidden Imports | pandas, requests, win32com.client, tkinter |
 
 Good luck with your build! 🚀

@@ -11,6 +11,7 @@ from matplotlib.figure import Figure
 import win32com.client
 import time
 import pyperclip
+import string
 
 # Import display preferences
 try:
@@ -22,10 +23,9 @@ try:
         format_location_raw
     )
     DISPLAY_PREFS_AVAILABLE = True
-    print("[DEBUG] display_preferences imported successfully")
-except ImportError as e:
+    pass
+except ImportError:
     DISPLAY_PREFS_AVAILABLE = False
-    print(f"[DEBUG] Failed to import display_preferences: {e}")
     # Create stub functions so the code doesn't crash
     def init_display_prefs(dir): pass
     def get_show_names(): return False
@@ -68,6 +68,8 @@ class SmartSchedulerApp:
         self.root = root
         self.root.title("Smart Scheduler")
         self.root.state('zoomed')  # Fullscreen
+
+        self.app_directory = os.path.dirname(os.path.abspath(__file__))
         
         # Project directory from command line
         self.project_dir = project_dir
@@ -105,18 +107,20 @@ class SmartSchedulerApp:
             self.appointments_csv = Path(self.project_dir) / 'confirmed_appointments.csv'
         else:
             self.appointments_csv = None
+
+        # Message template path (per-project if available)
+        if self.project_dir:
+            self.message_template_path = Path(self.project_dir) / 'message_template.txt'
+        else:
+            self.message_template_path = Path(self.app_directory) / 'message_template.txt'
         
         # Initialize display preferences
         if DISPLAY_PREFS_AVAILABLE:
             try:
-                print(f"[DEBUG] Initializing display preferences for {self.project_dir}")
                 init_display_prefs(self.project_dir if self.project_dir else os.getcwd())
                 register_callback(self.on_display_preference_changed)
-                print("[DEBUG] Display preferences initialized and callback registered")
-            except Exception as e:
-                print(f"[DEBUG] Warning: Could not initialize display preferences: {e}")
-        else:
-            print("[DEBUG] DISPLAY_PREFS_AVAILABLE is False")
+            except Exception:
+                pass
         
         # Display preference UI variable
         self.show_names_var = tk.BooleanVar(value=False)
@@ -1668,7 +1672,7 @@ class SmartSchedulerApp:
             created_count = 0
             failed = []
             
-            for postcode, (date, time, duration, in_outlook) in to_sync:
+            for postcode, (date, time_str, duration, in_outlook) in to_sync:
                 try:
                     # Get region color for this postcode
                     color_code = self.get_region_color_for_postcode(postcode)
@@ -1676,10 +1680,10 @@ class SmartSchedulerApp:
                     category_name = f"Appointment - {color_name}"
                     
                     # Create Outlook appointment
-                    if self.create_outlook_appointment(outlook, postcode, date, time, duration, category_name, color_code):
+                    if self.create_outlook_appointment(outlook, postcode, date, time_str, duration, category_name, color_code):
                         created_count += 1
                         # Update in memory
-                        self.confirmed_appointments[postcode] = (date, time, duration, True)
+                        self.confirmed_appointments[postcode] = (date, time_str, duration, True)
                     else:
                         failed.append(postcode)
                 except Exception as e:
@@ -1982,9 +1986,7 @@ class SmartSchedulerApp:
         for date_str in slots_by_date:
             slots_by_date[date_str].sort(key=lambda x: x[2])
         
-        # Build message
-        message_lines = [f"I can offer a {duration_str} appointment starting at any of these times:"]
-        message_lines.append("")
+        slot_lines = []
         
         for date_str in sorted(slots_by_date.keys()):
             date_obj = datetime.strptime(date_str, '%d-%b-%y')
@@ -2018,12 +2020,94 @@ class SmartSchedulerApp:
                 start_time_12h = self.format_time_12hour(range_start[1])
                 end_time_12h = self.format_time_12hour(range_end[1])
                 
-                message_lines.append(f"• {day_name}, {date_str}: {start_time_12h} - {end_time_12h}")
-        
-        message_lines.append("")
-        message_lines.append("Please let me know which time(s) works best for you.")
-        
-        return "\n".join(message_lines)
+                slot_lines.append(f"• {day_name}, {date_str}: {start_time_12h} - {end_time_12h}")
+
+        slots_text = "\n".join(slot_lines)
+        template_text = self.load_message_template()
+        template = string.Template(template_text)
+
+        return template.safe_substitute(
+            duration=duration_str,
+            slots=slots_text
+        )
+
+    def get_default_message_template(self):
+        return (
+            "Hello,\n\n"
+            "I can offer a $duration appointment starting at any of these times:\n\n"
+            "$slots\n\n"
+            "Please let me know which time(s) works best for you."
+        )
+
+    def load_message_template(self):
+        """Load message template from file or return default."""
+        try:
+            if self.message_template_path and self.message_template_path.exists():
+                return self.message_template_path.read_text(encoding="utf-8")
+        except Exception as e:
+            print(f"[DEBUG] Failed to load message template: {e}")
+
+        return self.get_default_message_template()
+
+    def save_message_template(self, template_text):
+        """Save message template to file."""
+        if not self.message_template_path:
+            return False
+
+        try:
+            self.message_template_path.write_text(template_text, encoding="utf-8")
+            return True
+        except Exception as e:
+            print(f"[DEBUG] Failed to save message template: {e}")
+            return False
+
+    def open_template_editor(self, on_saved=None):
+        """Open dialog to edit and save the message template."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Edit Message Template")
+        dialog.geometry("700x500")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        main_frame = ttk.Frame(dialog, padding="15")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(
+            main_frame,
+            text="Use $duration and $slots in the template.",
+            font=('Arial', 10, 'bold')
+        ).pack(anchor=tk.W, pady=(0, 8))
+
+        template_text = tk.Text(main_frame, wrap=tk.WORD, font=('Consolas', 10))
+        template_text.pack(fill=tk.BOTH, expand=True)
+        template_text.insert('1.0', self.load_message_template())
+
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+
+        status_label = ttk.Label(button_frame, text="", font=('Arial', 9))
+        status_label.pack(side=tk.LEFT)
+
+        def save_template():
+            content = template_text.get('1.0', tk.END).rstrip()
+            if not content:
+                status_label.config(text="Template cannot be empty.", foreground='red')
+                return
+            if self.save_message_template(content):
+                status_label.config(text="✓ Template saved", foreground='green')
+                if on_saved:
+                    on_saved()
+            else:
+                status_label.config(text="✗ Failed to save", foreground='red')
+
+        def reset_template():
+            template_text.delete('1.0', tk.END)
+            template_text.insert('1.0', self.get_default_message_template())
+            status_label.config(text="Reset to default.", foreground='blue')
+
+        ttk.Button(button_frame, text="Save", command=save_template).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="Reset to Default", command=reset_template).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="Close", command=dialog.destroy).pack(side=tk.RIGHT, padx=5)
 
     def open_available_slots_dialog(self):
         """Open dialog showing available time slots in timetable format"""
@@ -2188,6 +2272,8 @@ class SmartSchedulerApp:
         
         copy_button = ttk.Button(button_frame, text="Copy to Clipboard")
         copy_button.pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(button_frame, text="Edit Template", command=lambda: self.open_template_editor(update_message)).pack(side=tk.LEFT, padx=5)
         
         def copy_to_clipboard():
             """Copy message to clipboard"""

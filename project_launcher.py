@@ -9,6 +9,11 @@ import time
 import stat
 import pandas as pd
 import threading
+import tempfile
+import html
+import webbrowser
+import re
+from pathlib import Path
 
 # Import the other apps for single-EXE compatibility
 APPS_IMPORTED = False
@@ -155,10 +160,18 @@ class ProjectLauncher:
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(1, weight=1)
         
-        # Title
-        title_label = ttk.Label(main_frame, text="TSP Project Launcher", 
+        # Title + Help
+        title_frame = ttk.Frame(main_frame)
+        title_frame.grid(row=0, column=0, columnspan=2, pady=(0, 20), sticky=(tk.W, tk.E))
+        title_frame.columnconfigure(0, weight=1)
+
+        title_label = ttk.Label(title_frame, text="TSP Project Launcher", 
                                font=('Arial', 18, 'bold'))
-        title_label.grid(row=0, column=0, columnspan=2, pady=(0, 20))
+        title_label.grid(row=0, column=0, sticky=tk.W)
+
+        ttk.Button(title_frame, text="Help", command=self.show_help, width=10).grid(
+            row=0, column=1, sticky=tk.E
+        )
         
         # Left column container
         left_frame = ttk.Frame(main_frame)
@@ -297,6 +310,106 @@ class ProjectLauncher:
             self.clustering_btn.config(state=tk.DISABLED)
             self.scheduler_btn.config(state=tk.DISABLED)
             self.smart_scheduler_btn.config(state=tk.DISABLED)
+
+    def show_help(self):
+        """Open README in the default web browser."""
+        base_dir = getattr(sys, '_MEIPASS', self.app_directory)
+        help_html_path = os.path.join(base_dir, "help.html")
+        readme_path = os.path.join(base_dir, "README.md")
+
+        if os.path.exists(help_html_path):
+            try:
+                webbrowser.open(Path(help_html_path).as_uri())
+                return
+            except Exception as e:
+                messagebox.showerror("Help Error", f"Failed to open help page:\n{e}")
+                return
+
+        if not os.path.exists(readme_path):
+            messagebox.showwarning("Help Not Found", "README.md was not found in the app folder.")
+            return
+
+        try:
+            with open(readme_path, "r", encoding="utf-8") as f:
+                readme_content = f.read()
+
+                rendered_html = self.render_markdown_basic(readme_content)
+            html_content = f"""<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Smart Scheduler Help</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 24px; background: #f7f7f8; color: #222; }}
+        .container {{ max-width: 980px; margin: 0 auto; background: #fff; padding: 24px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}
+        .content {{ font-size: 14px; line-height: 1.6; }}
+        h1, h2, h3, h4, h5, h6 {{ margin-top: 18px; margin-bottom: 8px; }}
+        p {{ margin: 6px 0; }}
+        ul {{ margin: 6px 0 6px 18px; }}
+        code, pre {{ font-family: Consolas, monospace; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Smart Scheduler Help</h1>
+        <div class="content">{rendered_html}</div>
+    </div>
+</body>
+</html>"""
+
+            with tempfile.NamedTemporaryFile("w", delete=False, suffix=".html", encoding="utf-8") as temp_file:
+                temp_file.write(html_content)
+                temp_path = temp_file.name
+
+            webbrowser.open(Path(temp_path).as_uri())
+        except Exception as e:
+            messagebox.showerror("Help Error", f"Failed to open help page:\n{e}")
+
+    def render_markdown_basic(self, markdown_text):
+        """Render a minimal subset of Markdown to HTML for help display."""
+        lines = markdown_text.splitlines()
+        html_lines = []
+        in_list = False
+
+        def close_list():
+            nonlocal in_list
+            if in_list:
+                html_lines.append("</ul>")
+                in_list = False
+
+        link_pattern = re.compile(r"\[(.+?)\]\((.+?)\)")
+
+        for line in lines:
+            heading_match = re.match(r"^(#{1,6})\s+(.+)", line)
+            if heading_match:
+                close_list()
+                level = len(heading_match.group(1))
+                text = html.escape(heading_match.group(2).strip())
+                html_lines.append(f"<h{level}>{text}</h{level}>")
+                continue
+
+            stripped = line.strip()
+            if stripped.startswith("- ") or stripped.startswith("* "):
+                if not in_list:
+                    html_lines.append("<ul>")
+                    in_list = True
+                item_text = html.escape(stripped[2:].strip())
+                html_lines.append(f"<li>{item_text}</li>")
+                continue
+
+            if stripped == "":
+                close_list()
+                html_lines.append("<br>")
+                continue
+
+            close_list()
+            safe_text = html.escape(line)
+            safe_text = link_pattern.sub(r"<a href=\"\\2\">\\1</a>", safe_text)
+            html_lines.append(f"<p>{safe_text}</p>")
+
+        close_list()
+        return "\n".join(html_lines)
     
     def update_project_info(self):
         """Update the project files info display"""
