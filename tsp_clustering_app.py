@@ -128,7 +128,7 @@ class TSPClusteringApp:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(1, weight=1)
+        main_frame.rowconfigure(2, weight=1)
         
         # Button bar at top for quick menu access
         button_bar = ttk.Frame(main_frame)
@@ -151,22 +151,6 @@ class TSPClusteringApp:
         self.rename_color_btn.pack(side=tk.LEFT, padx=2)
         self.view_btn = ttk.Button(button_bar, text="Analytics", command=self.show_log_window, width=12)
         self.view_btn.pack(side=tk.LEFT, padx=2)
-        
-        # Status bar showing current configuration
-        status_bar_frame = ttk.Frame(main_frame, relief=tk.SUNKEN, borderwidth=1)
-        status_bar_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
-        
-        self.locations_status = ttk.Label(status_bar_frame, text="Locations: Not loaded", 
-                                         font=('Arial', 9))
-        self.locations_status.pack(side=tk.LEFT, padx=5)
-        
-        self.distances_status = ttk.Label(status_bar_frame, text="Distances: Not loaded", 
-                                         font=('Arial', 9))
-        self.distances_status.pack(side=tk.LEFT, padx=5)
-        
-        self.output_status = ttk.Label(status_bar_frame, text="Output: Not set", 
-                                      font=('Arial', 9))
-        self.output_status.pack(side=tk.LEFT, padx=5)
         
         # Visualization frame (main content area)
         self.viz_frame = ttk.LabelFrame(main_frame, text="Visualization", padding="5")
@@ -284,13 +268,11 @@ class TSPClusteringApp:
         
         # Set output directory to project directory
         self.output_dir = self.project_dir
-        self.output_status.config(text=f"Output: {project_name}", foreground="green")
         
         # Load locations.csv
         locations_path = os.path.join(self.project_dir, "locations.csv")
         if os.path.exists(locations_path):
             self.locations_file = locations_path
-            self.locations_status.config(text=f"Locations: locations.csv", foreground="green")
             self.log(f"✓ Auto-loaded: {locations_path}")
         else:
             self.log(f"⚠ locations.csv not found in project directory")
@@ -299,7 +281,6 @@ class TSPClusteringApp:
         distances_path = os.path.join(self.project_dir, "distances.csv")
         if os.path.exists(distances_path):
             self.distances_file = distances_path
-            self.distances_status.config(text=f"Distances: distances.csv", foreground="green")
             self.log(f"✓ Auto-loaded: {distances_path}")
         else:
             self.log(f"⚠ distances.csv not found in project directory")
@@ -1420,8 +1401,8 @@ class TSPClusteringApp:
         self.viz_canvas_container = ttk.Frame(self.viz_frame)
         self.viz_canvas_container.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        # Create figure
-        fig = Figure(figsize=(12, 8), dpi=100)
+        # Create figure (constrained layout prevents axis labels from being clipped)
+        fig = Figure(figsize=(12, 8), dpi=100, constrained_layout=True)
         ax = fig.add_subplot(111)
         
         # Build color list from region colors (use Outlook colors if available)
@@ -1531,17 +1512,25 @@ class TSPClusteringApp:
         ax.legend(loc='best', fontsize=9)
         ax.grid(True, alpha=0.3)
         
-        fig.tight_layout()
-        
-        # Embed in tkinter
-        canvas = FigureCanvasTkAgg(fig, master=self.viz_canvas_container)
+        # Embed in tkinter with dedicated frames so toolbar stays visible on resize
+        self.viz_canvas_container.grid_rowconfigure(0, weight=1)
+        self.viz_canvas_container.grid_rowconfigure(1, weight=0)
+        self.viz_canvas_container.grid_columnconfigure(0, weight=1)
+
+        plot_frame = ttk.Frame(self.viz_canvas_container)
+        plot_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        toolbar_frame = ttk.Frame(self.viz_canvas_container)
+        toolbar_frame.grid(row=1, column=0, sticky=(tk.W, tk.E))
+
+        canvas = FigureCanvasTkAgg(fig, master=plot_frame)
+        canvas_widget = canvas.get_tk_widget()
+        canvas_widget.pack(fill=tk.BOTH, expand=True)
         canvas.draw()
-        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        
-        # Add toolbar
-        toolbar = NavigationToolbar2Tk(canvas, self.viz_canvas_container)
+
+        toolbar = NavigationToolbar2Tk(canvas, toolbar_frame, pack_toolbar=False)
         toolbar.update()
-        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        toolbar.pack(fill=tk.X)
         
         self.canvas = canvas
         self.toolbar = toolbar
@@ -1560,8 +1549,8 @@ class TSPClusteringApp:
         self.viz_canvas_container = ttk.Frame(self.viz_frame)
         self.viz_canvas_container.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
-        # Create figure
-        fig = Figure(figsize=(12, 8), dpi=100)
+        # Create figure (constrained layout prevents axis labels from being clipped)
+        fig = Figure(figsize=(12, 8), dpi=100, constrained_layout=True)
         ax = fig.add_subplot(111)
         
         # Plot all locations (not yet clustered)
@@ -1608,17 +1597,25 @@ class TSPClusteringApp:
         ax.legend(loc='best', fontsize=10)
         ax.grid(True, alpha=0.3)
         
-        fig.tight_layout()
-        
-        # Embed in tkinter
-        canvas = FigureCanvasTkAgg(fig, master=self.viz_canvas_container)
+        # Embed in tkinter with dedicated frames so toolbar stays visible on resize
+        self.viz_canvas_container.grid_rowconfigure(0, weight=1)
+        self.viz_canvas_container.grid_rowconfigure(1, weight=0)
+        self.viz_canvas_container.grid_columnconfigure(0, weight=1)
+
+        plot_frame = ttk.Frame(self.viz_canvas_container)
+        plot_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        toolbar_frame = ttk.Frame(self.viz_canvas_container)
+        toolbar_frame.grid(row=1, column=0, sticky=(tk.W, tk.E))
+
+        canvas = FigureCanvasTkAgg(fig, master=plot_frame)
+        canvas_widget = canvas.get_tk_widget()
+        canvas_widget.pack(fill=tk.BOTH, expand=True)
         canvas.draw()
-        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        
-        # Add toolbar
-        toolbar = NavigationToolbar2Tk(canvas, self.viz_canvas_container)
+
+        toolbar = NavigationToolbar2Tk(canvas, toolbar_frame, pack_toolbar=False)
         toolbar.update()
-        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        toolbar.pack(fill=tk.X)
         
         self.canvas = canvas
         self.toolbar = toolbar
