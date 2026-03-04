@@ -7,7 +7,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from matplotlib.figure import Figure
 from sklearn.cluster import AgglomerativeClustering
 from scipy.spatial import ConvexHull
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, Point
 import threading
 import os
 import sys
@@ -203,6 +203,22 @@ class TSPClusteringApp:
         if self.log_window:
             self.log_window.destroy()
         self.root.destroy()
+
+    def _assign_location_instance_ids(self, df):
+        """Add stable per-postcode instance identifiers to distinguish duplicate postcodes."""
+        if 'postcode' not in df.columns:
+            return df
+
+        out = df.copy()
+        out['postcode'] = out['postcode'].astype(str)
+
+        if 'location_instance' not in out.columns:
+            out['location_instance'] = out.groupby('postcode').cumcount() + 1
+
+        if 'location_id' not in out.columns:
+            out['location_id'] = out['postcode'] + '#' + out['location_instance'].astype(int).astype(str)
+
+        return out
     
     def toggle_display_preference(self):
         """Toggle between showing names and postcodes"""
@@ -446,9 +462,12 @@ class TSPClusteringApp:
             self.depot_postcode_var.set(depot_postcode)
             
             # Get customers (exclude depot, but include excluded locations with region -1)
-            customers_df = results_df[results_df['region'] != 0]
+            customers_df = results_df[results_df['region'] != 0].copy()
+            customers_df = self._assign_location_instance_ids(customers_df)
             coords = customers_df[['latitude', 'longitude']].values
             customer_postcodes = customers_df['postcode'].tolist()
+            customer_location_ids = customers_df['location_id'].tolist()
+            customer_location_instances = customers_df['location_instance'].astype(int).tolist()
             
             # Extract cluster labels (convert from 1-indexed to 0-indexed)
             # Region -1 stays as -1 (excluded), others convert from 1-indexed to 0-indexed
@@ -506,11 +525,13 @@ class TSPClusteringApp:
             self.depot = depot
             self.n_clusters = n_clusters
             self.customer_postcodes = customer_postcodes
+            self.customer_location_ids = customer_location_ids
+            self.customer_location_instances = customer_location_instances
             self.customer_names = customers_df['client_name'].tolist() if 'client_name' in customers_df.columns else [None] * len(customer_postcodes)
             self.depot_postcode = depot_postcode
             
             # Prepare results for potential saving
-            self.clustered_results = results_df
+            self.clustered_results = self._assign_location_instance_ids(results_df)
             
             # Load summary if available
             summary_file = os.path.join(self.output_dir, "region_summary.csv")
@@ -835,7 +856,8 @@ class TSPClusteringApp:
             self.log(f"✓ Home base location: {depot_postcode} at ({depot_lat:.4f}, {depot_lon:.4f})")
             
             # Extract customer coordinates (excluding depot)
-            customers_df = locations_df[locations_df['postcode'].str.upper() != depot_postcode]
+            customers_df = locations_df[locations_df['postcode'].str.upper() != depot_postcode].copy()
+            customers_df = self._assign_location_instance_ids(customers_df)
             coords = customers_df[['latitude', 'longitude']].values
             self.log(f"✓ Clustering {len(coords)} customers (depot excluded)")
             
@@ -845,9 +867,12 @@ class TSPClusteringApp:
             self.log(f"\nUsing {actual_regions} regions")
             self.progress_bar['value'] = 35
             
-            # Update postcode_to_idx for customers only (excluding depot)
-            customer_postcodes = sorted(customers_df['postcode'])
-            customer_postcode_to_idx = {pc: i for i, pc in enumerate(customer_postcodes)}
+            # Customer metadata (keep exact row order aligned with coords/labels)
+            customer_postcodes = customers_df['postcode'].tolist()
+            customer_location_ids = customers_df['location_id'].tolist()
+            customer_location_instances = customers_df['location_instance'].astype(int).tolist()
+            # Map customer postcode to driving-matrix index (duplicates intentionally share index)
+            customer_postcode_to_idx = {pc: postcode_to_idx[pc] for pc in set(customer_postcodes) if pc in postcode_to_idx}
             
             # Run clustering
             self.log("\nPerforming clustering optimization...")
@@ -877,7 +902,7 @@ class TSPClusteringApp:
             
             # Add cluster assignments to customer locations (depot separate)
             results_df = customers_df.copy()
-            results_df['region'] = [labels[customer_postcode_to_idx[pc]] + 1 for pc in results_df['postcode']]
+            results_df['region'] = labels + 1
             results_df = results_df.sort_values('region')
             
             # Add depot as a separate entry with region 0
@@ -908,6 +933,8 @@ class TSPClusteringApp:
             self.depot = depot
             self.n_clusters = actual_regions
             self.customer_postcodes = customer_postcodes
+            self.customer_location_ids = customer_location_ids
+            self.customer_location_instances = customer_location_instances
             self.customer_names = customers_df['client_name'].tolist() if 'client_name' in customers_df.columns else [None] * len(customer_postcodes)
             self.depot_postcode = depot_postcode
             self.driving_time_matrix = driving_time_matrix
@@ -993,6 +1020,284 @@ class TSPClusteringApp:
                     return True
         
         return False
+
+    def _get_cluster_polygon(self, cluster_points):
+        """Build a convex hull polygon for a cluster, or None if not possible."""
+        if len(cluster_points) < 3:
+            return None
+        try:
+            hull = ConvexHull(cluster_points)
+            return Polygon(cluster_points[hull.vertices])
+        except Exception:
+            return None
+
+    def _enforce_geographic_constraints(self, coords, labels, n_clusters, depot, min_size=3, max_iterations=200):
+        """
+        Post-process labels to reduce hull overlaps and keep depot outside region hulls.
+        This is a lightweight local search and preserves minimum cluster size.
+        """
+        depot_point = Point(depot[0, 0], depot[0, 1])
+
+        for _ in range(max_iterations):
+            changed = False
+
+            # Recompute centroids each pass
+            centroids = {}
+            for cid in range(n_clusters):
+                mask = labels == cid
+                if np.sum(mask) > 0:
+                    centroids[cid] = coords[mask].mean(axis=0)
+                else:
+                    centroids[cid] = None
+
+            # 1) Keep depot outside all cluster hulls
+            for cid in range(n_clusters):
+                indices = np.where(labels == cid)[0]
+                if len(indices) <= min_size:
+                    continue
+
+                poly = self._get_cluster_polygon(coords[indices])
+                if poly is None or not poly.contains(depot_point):
+                    continue
+
+                # Move one boundary-point candidate to nearest alternative cluster centroid
+                best_move = None
+                for idx in indices:
+                    if len(indices) - 1 < min_size:
+                        continue
+                    for target in range(n_clusters):
+                        if target == cid or centroids[target] is None:
+                            continue
+
+                        # Prefer moves that improve centroid fit
+                        dist_to_own = np.linalg.norm(coords[idx] - centroids[cid])
+                        dist_to_target = np.linalg.norm(coords[idx] - centroids[target])
+                        score = dist_to_target - dist_to_own
+
+                        if best_move is None or score < best_move[0]:
+                            best_move = (score, idx, target)
+
+                if best_move is not None:
+                    _, move_idx, target_cluster = best_move
+                    labels[move_idx] = target_cluster
+                    changed = True
+                    break
+
+            if changed:
+                continue
+
+            # 2) Reduce overlapping hulls by moving closest boundary point from larger cluster
+            cluster_polys = {}
+            cluster_sizes = {}
+            for cid in range(n_clusters):
+                indices = np.where(labels == cid)[0]
+                cluster_sizes[cid] = len(indices)
+                cluster_polys[cid] = self._get_cluster_polygon(coords[indices])
+
+            for i in range(n_clusters):
+                for j in range(i + 1, n_clusters):
+                    poly_i = cluster_polys[i]
+                    poly_j = cluster_polys[j]
+
+                    if poly_i is None or poly_j is None:
+                        continue
+
+                    if not (poly_i.intersects(poly_j) and not poly_i.touches(poly_j)):
+                        continue
+
+                    # Move from larger cluster to smaller cluster
+                    src = i if cluster_sizes[i] >= cluster_sizes[j] else j
+                    dst = j if src == i else i
+
+                    src_indices = np.where(labels == src)[0]
+                    if len(src_indices) <= min_size or centroids[dst] is None:
+                        continue
+
+                    # Candidate is point in source cluster closest to destination centroid
+                    dists = [np.linalg.norm(coords[idx] - centroids[dst]) for idx in src_indices]
+                    move_idx = src_indices[int(np.argmin(dists))]
+                    labels[move_idx] = dst
+                    changed = True
+                    break
+                if changed:
+                    break
+
+            if not changed:
+                break
+
+        return labels
+
+    def _depot_inside_any_hull(self, coords, labels, n_clusters, depot):
+        """Return True if depot lies strictly inside any cluster convex hull."""
+        depot_point = Point(depot[0, 0], depot[0, 1])
+        for cid in range(n_clusters):
+            cluster_points = coords[labels == cid]
+            poly = self._get_cluster_polygon(cluster_points)
+            if poly is not None and poly.contains(depot_point):
+                return True
+        return False
+
+    def _recompute_centroids(self, coords, labels, n_clusters):
+        """Compute centroids for each cluster; fallback to global mean for empty clusters."""
+        global_centroid = coords.mean(axis=0)
+        centroids = np.zeros((n_clusters, coords.shape[1]))
+        for cid in range(n_clusters):
+            cluster_points = coords[labels == cid]
+            if len(cluster_points) > 0:
+                centroids[cid] = cluster_points.mean(axis=0)
+            else:
+                centroids[cid] = global_centroid
+        return centroids
+
+    def _repair_min_cluster_sizes(self, coords, labels, centroids, min_size, max_moves=5000):
+        """Greedy repair so every cluster has at least min_size points."""
+        moves = 0
+        labels = labels.copy()
+
+        while moves < max_moves:
+            cluster_sizes = np.array([np.sum(labels == cid) for cid in range(len(centroids))])
+            small_clusters = np.where(cluster_sizes < min_size)[0]
+            if len(small_clusters) == 0:
+                break
+
+            moved_any = False
+            for target in small_clusters:
+                cluster_sizes = np.array([np.sum(labels == cid) for cid in range(len(centroids))])
+                donor_clusters = np.where(cluster_sizes > min_size)[0]
+                if len(donor_clusters) == 0:
+                    continue
+
+                best_candidate = None
+                for donor in donor_clusters:
+                    donor_indices = np.where(labels == donor)[0]
+                    for idx in donor_indices:
+                        own_dist = np.linalg.norm(coords[idx] - centroids[donor])
+                        target_dist = np.linalg.norm(coords[idx] - centroids[target])
+                        penalty = target_dist - own_dist
+                        if best_candidate is None or penalty < best_candidate[0]:
+                            best_candidate = (penalty, idx, donor, target)
+
+                if best_candidate is not None:
+                    _, idx, donor, target = best_candidate
+                    labels[idx] = target
+                    moves += 1
+                    moved_any = True
+
+            if not moved_any:
+                break
+
+        return labels
+
+    def _strict_non_overlap_repartition(self, coords, labels, n_clusters, min_size, max_iterations=40):
+        """
+        Hard geometric fallback:
+        1) Voronoi-style reassignment to nearest centroid (creates disjoint spatial partition)
+        2) Minimum-size repair
+        Repeated until stable.
+        """
+        labels = labels.copy()
+
+        for _ in range(max_iterations):
+            centroids = self._recompute_centroids(coords, labels, n_clusters)
+
+            # Voronoi-style assignment (nearest centroid)
+            dists = np.linalg.norm(coords[:, np.newaxis, :] - centroids[np.newaxis, :, :], axis=2)
+            new_labels = np.argmin(dists, axis=1)
+
+            # Enforce minimum cluster size
+            new_labels = self._repair_min_cluster_sizes(coords, new_labels, centroids, min_size)
+
+            if np.array_equal(new_labels, labels):
+                break
+            labels = new_labels
+
+        return labels
+
+    def _emergency_geometry_sanitize(self, coords, labels, n_clusters, depot, max_iterations=1000):
+        """
+        Last-resort sanitizer to guarantee geometric constraints without aborting run.
+        Strategy:
+        - If depot is inside a cluster hull, move one point out of that cluster.
+        - If two hulls overlap, move one point from the smaller overlap-driving cluster.
+        This may create small (1-2 point) clusters, which is acceptable for geometric validity.
+        """
+        labels = labels.copy()
+        depot_point = Point(depot[0, 0], depot[0, 1])
+
+        for _ in range(max_iterations):
+            changed = False
+
+            # Recompute centroids every pass
+            centroids = self._recompute_centroids(coords, labels, n_clusters)
+
+            # A) Remove depot from inside any hull
+            for cid in range(n_clusters):
+                cluster_indices = np.where(labels == cid)[0]
+                if len(cluster_indices) < 3:
+                    continue
+
+                poly = self._get_cluster_polygon(coords[cluster_indices])
+                if poly is None or not poly.contains(depot_point):
+                    continue
+
+                # Move point closest to another cluster centroid
+                best_move = None
+                for idx in cluster_indices:
+                    for target in range(n_clusters):
+                        if target == cid:
+                            continue
+                        dist_target = np.linalg.norm(coords[idx] - centroids[target])
+                        dist_own = np.linalg.norm(coords[idx] - centroids[cid])
+                        score = dist_target - dist_own
+                        if best_move is None or score < best_move[0]:
+                            best_move = (score, idx, target)
+
+                if best_move is not None:
+                    _, idx, target = best_move
+                    labels[idx] = target
+                    changed = True
+                    break
+
+            if changed:
+                continue
+
+            # B) Remove hull overlaps
+            polys = {}
+            sizes = {}
+            for cid in range(n_clusters):
+                cluster_indices = np.where(labels == cid)[0]
+                sizes[cid] = len(cluster_indices)
+                polys[cid] = self._get_cluster_polygon(coords[cluster_indices])
+
+            for i in range(n_clusters):
+                for j in range(i + 1, n_clusters):
+                    pi = polys[i]
+                    pj = polys[j]
+                    if pi is None or pj is None:
+                        continue
+                    if not (pi.intersects(pj) and not pi.touches(pj)):
+                        continue
+
+                    # Move one point from smaller cluster (or i when equal) to the other
+                    src = i if sizes[i] <= sizes[j] else j
+                    dst = j if src == i else i
+
+                    src_indices = np.where(labels == src)[0]
+                    if len(src_indices) == 0:
+                        continue
+
+                    dists = [np.linalg.norm(coords[idx] - centroids[dst]) for idx in src_indices]
+                    move_idx = src_indices[int(np.argmin(dists))]
+                    labels[move_idx] = dst
+                    changed = True
+                    break
+                if changed:
+                    break
+
+            if not changed:
+                break
+
+        return labels
     
     def balance_clusters(self, coords, depot, driving_time_matrix, n_clusters):
         """
@@ -1183,6 +1488,57 @@ class TSPClusteringApp:
                 break
         
         self.log(f"  ✓ Compactness optimized after {compact_iter + 1} iterations")
+
+        # Final geographic clean-up: reduce overlaps and keep depot outside region hulls
+        self.log("  Enforcing non-overlap/depot-outside constraints...")
+        labels = self._enforce_geographic_constraints(
+            coords,
+            labels,
+            n_clusters,
+            depot,
+            min_size=min_size,
+            max_iterations=200
+        )
+
+        # Hard fallback if constraints still violated
+        has_overlap = self.check_convex_hulls_overlap(coords, labels, n_clusters)
+        depot_inside = self._depot_inside_any_hull(coords, labels, n_clusters, depot)
+        if has_overlap or depot_inside:
+            self.log("  Constraints still violated - running strict geometric repartition...")
+            labels = self._strict_non_overlap_repartition(
+                coords,
+                labels,
+                n_clusters,
+                min_size=min_size,
+                max_iterations=40
+            )
+            labels = self._enforce_geographic_constraints(
+                coords,
+                labels,
+                n_clusters,
+                depot,
+                min_size=min_size,
+                max_iterations=400
+            )
+
+        has_overlap = self.check_convex_hulls_overlap(coords, labels, n_clusters)
+        depot_inside = self._depot_inside_any_hull(coords, labels, n_clusters, depot)
+        if has_overlap or depot_inside:
+            self.log("  Running emergency geometry sanitizer...")
+            labels = self._emergency_geometry_sanitize(coords, labels, n_clusters, depot, max_iterations=1000)
+            has_overlap = self.check_convex_hulls_overlap(coords, labels, n_clusters)
+            depot_inside = self._depot_inside_any_hull(coords, labels, n_clusters, depot)
+
+            # Keep app running even in pathological geometry; this is now best-effort automatic recovery
+            if has_overlap or depot_inside:
+                self.log("  ⚠ Geometry sanitizer reached limit; constraints may be partially unresolved")
+            else:
+                self.log("  ✓ Emergency sanitizer resolved all geometric constraints")
+
+        if not has_overlap and not depot_inside:
+            self.log("  ✓ Final geometric constraints satisfied (no overlap, depot outside)")
+        else:
+            self.log("  ⚠ Final geometric constraints not fully satisfied")
         
         # Calculate final metrics - sum of intra-cluster distances
         self.log("  Calculating final metrics...")
@@ -1460,14 +1816,44 @@ class TSPClusteringApp:
                       label=f'Excluded ({np.sum(excluded_mask)} locations)')
         
         # Add postcode labels for customer locations
+        postcode_total_counts = {}
+        postcode_seen_counts = {}
+        for pc in customer_postcodes:
+            postcode_total_counts[pc] = postcode_total_counts.get(pc, 0) + 1
+
+        # For points with identical coordinates, spread label offsets radially
+        coord_keys = [(round(float(c[0]), 6), round(float(c[1]), 6)) for c in coords]
+        coord_total_counts = {}
+        coord_seen_counts = {}
+        for key in coord_keys:
+            coord_total_counts[key] = coord_total_counts.get(key, 0) + 1
+
         show_names = get_show_names()
         for idx, (coord, postcode) in enumerate(zip(coords, customer_postcodes)):
+            postcode_seen_counts[postcode] = postcode_seen_counts.get(postcode, 0) + 1
+            postcode_instance = postcode_seen_counts[postcode]
+            postcode_total = postcode_total_counts[postcode]
+            postcode_display = postcode if postcode_total == 1 else f"{postcode} ({postcode_instance}/{postcode_total})"
+
             # Determine what to display
             customer_name = customer_names[idx] if idx < len(customer_names) else None
             if show_names and customer_name:
-                display_text = customer_name
+                display_text = customer_name if postcode_total == 1 else f"{customer_name} [{postcode_display}]"
             else:
-                display_text = postcode
+                display_text = postcode_display
+
+            # Dynamic annotation offset for exact coordinate duplicates
+            key = coord_keys[idx]
+            coord_seen_counts[key] = coord_seen_counts.get(key, 0) + 1
+            coord_instance = coord_seen_counts[key]
+            coord_total = coord_total_counts[key]
+            if coord_total > 1:
+                angle = 2 * np.pi * (coord_instance - 1) / coord_total
+                radius = 8
+                offset_x = int(round(radius * np.cos(angle)))
+                offset_y = int(round(radius * np.sin(angle)))
+            else:
+                offset_x, offset_y = 3, 3
             
             # Different styling for excluded postcodes
             if labels[idx] == -1:
@@ -1479,7 +1865,7 @@ class TSPClusteringApp:
             
             ax.annotate(display_text, 
                        xy=(coord[1], coord[0]),
-                       xytext=(3, 3),  # Offset by 3 points
+                       xytext=(offset_x, offset_y),
                        textcoords='offset points',
                        fontsize=7,
                        fontweight='bold',
@@ -1560,13 +1946,42 @@ class TSPClusteringApp:
                   label=f'{len(coords)} Locations (Unclustered)')
         
         # Add postcode labels for all locations
+        postcode_total_counts = {}
+        postcode_seen_counts = {}
+        for pc in postcodes:
+            postcode_total_counts[pc] = postcode_total_counts.get(pc, 0) + 1
+
+        coord_keys = [(round(float(c[0]), 6), round(float(c[1]), 6)) for c in coords]
+        coord_total_counts = {}
+        coord_seen_counts = {}
+        for key in coord_keys:
+            coord_total_counts[key] = coord_total_counts.get(key, 0) + 1
+
         for idx, (coord, postcode) in enumerate(zip(coords, postcodes)):
             # Skip depot in this loop (will be added separately)
             if postcode.upper() == depot_postcode.upper():
                 continue
-            ax.annotate(postcode, 
+
+            postcode_seen_counts[postcode] = postcode_seen_counts.get(postcode, 0) + 1
+            instance = postcode_seen_counts[postcode]
+            total = postcode_total_counts[postcode]
+            label_text = postcode if total == 1 else f"{postcode} ({instance}/{total})"
+
+            key = coord_keys[idx]
+            coord_seen_counts[key] = coord_seen_counts.get(key, 0) + 1
+            coord_instance = coord_seen_counts[key]
+            coord_total = coord_total_counts[key]
+            if coord_total > 1:
+                angle = 2 * np.pi * (coord_instance - 1) / coord_total
+                radius = 8
+                offset_x = int(round(radius * np.cos(angle)))
+                offset_y = int(round(radius * np.sin(angle)))
+            else:
+                offset_x, offset_y = 3, 3
+
+            ax.annotate(label_text, 
                        xy=(coord[1], coord[0]),
-                       xytext=(3, 3),
+                       xytext=(offset_x, offset_y),
                        textcoords='offset points',
                        fontsize=7,
                        fontweight='bold',
@@ -1644,17 +2059,37 @@ class TSPClusteringApp:
                                 font=('Arial', 9), foreground='gray')
         instructions.pack(pady=(0, 15))
         
-        # Postcode selection
+        # Location selection
         postcode_frame = ttk.Frame(frame)
         postcode_frame.pack(fill=tk.X, pady=10)
         
-        ttk.Label(postcode_frame, text="Postcode:", font=('Arial', 10)).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(postcode_frame, text="Location:", font=('Arial', 10)).pack(side=tk.LEFT, padx=(0, 10))
         
-        # Get all postcodes except depot, sorted alphabetically
-        all_postcodes = sorted(self.clustered_results[self.clustered_results['region'] != 0]['postcode'].tolist())
-        postcode_var = tk.StringVar()
-        postcode_combo = ttk.Combobox(postcode_frame, textvariable=postcode_var, 
-                                     values=all_postcodes, state='readonly', width=20)
+        # Ensure unique location IDs exist
+        self.clustered_results = self._assign_location_instance_ids(self.clustered_results)
+
+        # Build selectable location labels (distinct even for duplicate postcodes)
+        editable_df = self.clustered_results[self.clustered_results['region'] != 0].copy()
+        postcode_counts = editable_df['postcode'].value_counts().to_dict()
+        selection_map = {}
+        selection_values = []
+
+        for _, row in editable_df.iterrows():
+            postcode = str(row['postcode'])
+            instance = int(row['location_instance']) if 'location_instance' in row and not pd.isna(row['location_instance']) else 1
+            total = int(postcode_counts.get(postcode, 1))
+            base = postcode if total == 1 else f"{postcode} ({instance}/{total})"
+            if 'client_name' in row and pd.notna(row['client_name']) and str(row['client_name']).strip():
+                display = f"{base} - {str(row['client_name']).strip()}"
+            else:
+                display = base
+            selection_map[display] = row['location_id']
+            selection_values.append(display)
+
+        selection_values = sorted(selection_values)
+        location_var = tk.StringVar()
+        postcode_combo = ttk.Combobox(postcode_frame, textvariable=location_var, 
+                                     values=selection_values, state='readonly', width=34)
         postcode_combo.pack(side=tk.LEFT, padx=(0, 10))
         
         # Current region display
@@ -1665,10 +2100,11 @@ class TSPClusteringApp:
         current_region_label.pack(side=tk.LEFT)
         
         def on_postcode_selected(event):
-            selected = postcode_var.get()
-            if selected:
+            selected = location_var.get()
+            if selected and selected in selection_map:
+                location_id = selection_map[selected]
                 current_region = self.clustered_results[
-                    self.clustered_results['postcode'] == selected
+                    self.clustered_results['location_id'] == location_id
                 ]['region'].iloc[0]
                 if current_region == -1:
                     current_region_var.set("Excluded")
@@ -1692,12 +2128,18 @@ class TSPClusteringApp:
         
         # Apply button
         def apply_edit():
-            selected_postcode = postcode_var.get()
+            selected_location = location_var.get()
             new_region_str = new_region_var.get()
             
-            if not selected_postcode:
-                messagebox.showwarning("No Postcode", "Please select a postcode.")
+            if not selected_location:
+                messagebox.showwarning("No Location", "Please select a location.")
                 return
+
+            if selected_location not in selection_map:
+                messagebox.showwarning("Invalid Selection", "Selected location is not valid.")
+                return
+
+            selected_location_id = selection_map[selected_location]
             
             if not new_region_str:
                 messagebox.showwarning("No Region", "Please select a new region.")
@@ -1720,38 +2162,38 @@ class TSPClusteringApp:
             
             # Get current region
             current_region = self.clustered_results[
-                self.clustered_results['postcode'] == selected_postcode
+                self.clustered_results['location_id'] == selected_location_id
             ]['region'].iloc[0]
             
             if current_region == new_region:
-                messagebox.showinfo("No Change", f"{selected_postcode} is already in {region_display}.")
+                messagebox.showinfo("No Change", f"{selected_location} is already in {region_display}.")
                 return
             
             # Update the region in clustered_results
             self.clustered_results.loc[
-                self.clustered_results['postcode'] == selected_postcode, 'region'
+                self.clustered_results['location_id'] == selected_location_id, 'region'
             ] = new_region
             
             # Update the labels array for visualization
-            postcode_idx = self.customer_postcodes.index(selected_postcode)
-            if new_region == -1:
-                # For excluded, we'll use a special value
-                self.labels[postcode_idx] = -1
-            else:
-                self.labels[postcode_idx] = new_region - 1  # labels are 0-indexed
+            if hasattr(self, 'customer_location_ids') and selected_location_id in self.customer_location_ids:
+                location_idx = self.customer_location_ids.index(selected_location_id)
+                if new_region == -1:
+                    self.labels[location_idx] = -1
+                else:
+                    self.labels[location_idx] = new_region - 1  # labels are 0-indexed
             
             # Update summary
             self.update_summary_results()
             
             # Log the change
             old_display = "Excluded" if current_region == -1 else f"Region {current_region}"
-            self.log(f"\n✏️ Manual Edit: {selected_postcode} moved from {old_display} to {region_display}")
+            self.log(f"\n✏️ Manual Edit: {selected_location} moved from {old_display} to {region_display}")
             
             # Refresh visualization
             self.refresh_visualization()
             
             messagebox.showinfo("Success", 
-                              f"{selected_postcode} has been moved to {region_display}.\n\n"
+                              f"{selected_location} has been moved to {region_display}.\n\n"
                               f"The visualization has been updated.")
             
             # Update current region display

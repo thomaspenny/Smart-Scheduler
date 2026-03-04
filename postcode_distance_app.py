@@ -29,7 +29,7 @@ class PostcodeDistanceApp:
         self.input_file = None
         self.output_dir = None
         self.postcodes = []
-        self.postcode_names = {}  # Map postcode -> client_name
+        self.postcode_names = []  # List parallel to self.postcodes (preserves duplicate entries)
         
         # Initialize display preferences
         if DISPLAY_PREFS_AVAILABLE:
@@ -132,18 +132,20 @@ class PostcodeDistanceApp:
                         df.to_csv(locations_path, index=False)
                         self.log(f"✓ Renamed first column to 'postcode'")
                 
-                self.postcodes = df['postcode'].dropna().str.strip().unique().tolist()
+                # Keep all postcodes including duplicates (needed for clustering multiple locations per postcode)
+                self.postcodes = df['postcode'].dropna().str.strip().tolist()
                 
-                # Store client names if available
+                # Store client names if available (parallel list matching postcode order)
                 if 'client_name' in df.columns:
                     for _, row in df.iterrows():
-                        postcode = str(row['postcode']).strip()
                         client_name = row['client_name'] if pd.notna(row['client_name']) else None
                         if client_name:
-                            self.postcode_names[postcode] = str(client_name).strip()
-                    self.log(f"✓ Loaded client names for {len(self.postcode_names)} locations")
+                            self.postcode_names.append(str(client_name).strip())
+                        else:
+                            self.postcode_names.append(None)
+                    self.log(f"✓ Loaded client names for {sum(1 for n in self.postcode_names if n)} locations (including duplicates)")
                 
-                self.log(f"✓ Loaded {len(self.postcodes)} unique postcodes")
+                self.log(f"✓ Loaded {len(self.postcodes)} postcodes (including duplicates)")
                 self.log(f"\n✓ Project '{project_name}' loaded successfully")
                 
                 # Enable generate button since we have input file and output directory
@@ -182,9 +184,10 @@ class PostcodeDistanceApp:
         """Load postcodes from CSV and extract prefixes"""
         try:
             df = pd.read_csv(self.input_file, header=None, names=['postcode'])
-            self.postcodes = df['postcode'].str.strip().unique().tolist()
+            # Keep all postcodes including duplicates (needed for clustering multiple locations per postcode)
+            self.postcodes = df['postcode'].str.strip().tolist()
             
-            self.log(f"Loaded {len(self.postcodes)} postcodes")
+            self.log(f"Loaded {len(self.postcodes)} postcodes (including duplicates)")
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load postcodes: {e}")
@@ -207,49 +210,59 @@ class PostcodeDistanceApp:
             self.log("Starting postcode processing...")
             self.log("="*70)
             
-            # Step 1: Geocode postcodes
+            # Step 1: Geocode postcodes (keep unique postcode coords, but preserve all locations)
             self.log("\nSTEP 1: Geocoding postcodes...")
-            postcode_coords = {}
+            postcode_coords = {}  # Unique postcode -> coords (for distance calculation)
+            unique_postcodes_seen = set()
             total_postcodes = len(self.postcodes)
             
             for i, postcode in enumerate(self.postcodes, 1):
-                coords = self.get_coordinates_from_postcode(postcode)
-                if coords:
-                    postcode_coords[postcode] = coords
-                    if i % 5 == 0 or i == total_postcodes:
-                        progress = (i / total_postcodes) * 30  # First 30% for geocoding
-                        self.progress_bar['value'] = progress
-                        self.log(f"  Geocoded {i}/{total_postcodes} ({i*100//total_postcodes}%)")
-                else:
-                    self.log(f"  ✗ Failed: {postcode}")
-                time.sleep(0.1)
+                if postcode not in unique_postcodes_seen:
+                    coords = self.get_coordinates_from_postcode(postcode)
+                    if coords:
+                        postcode_coords[postcode] = coords
+                        unique_postcodes_seen.add(postcode)
+                        if i % 5 == 0 or i == total_postcodes:
+                            progress = (i / total_postcodes) * 30  # First 30% for geocoding
+                            self.progress_bar['value'] = progress
+                            self.log(f"  Geocoded {i}/{total_postcodes} ({i*100//total_postcodes}%)")
+                    else:
+                        self.log(f"  ✗ Failed: {postcode}")
+                    time.sleep(0.1)
             
-            self.log(f"✓ Successfully geocoded {len(postcode_coords)} postcodes")
+            self.log(f"✓ Successfully geocoded {len(postcode_coords)} unique postcodes")
             
-            # Save coordinates file as distance_matrix.csv
+            # Save coordinates file as distance_matrix.csv (ALL postcodes including duplicates)
             coords_output = os.path.join(self.output_dir, "distance_matrix.csv")
             postcode_data = []
-            for pc in sorted(postcode_coords.keys()):
+            # Use original postcode list to preserve duplicates
+            postcodes_with_coords = []
+            for i, pc in enumerate(self.postcodes):
+                if pc in postcode_coords:
+                    postcodes_with_coords.append((i, pc))
+            
+            for i, pc in postcodes_with_coords:
                 coords = postcode_coords[pc]
                 row = {
                     'postcode': pc, 
                     'latitude': coords['latitude'], 
                     'longitude': coords['longitude']
                 }
-                # Add client_name if available
-                if pc in self.postcode_names:
-                    row['client_name'] = self.postcode_names[pc]
+                # Add client_name if available (from parallel list)
+                if i < len(self.postcode_names) and self.postcode_names[i]:
+                    row['client_name'] = self.postcode_names[i]
                 postcode_data.append(row)
             
             postcode_list_df = pd.DataFrame(postcode_data)
             postcode_list_df.to_csv(coords_output, index=False)
-            self.log(f"✓ Saved coordinates to: {coords_output}")
+            self.log(f"✓ Saved {len(postcode_list_df)} postcode locations (including duplicates) to: {coords_output}")
             
             # Step 2: Calculate distances
             self.log("\nSTEP 2: Calculating driving distances...")
             
-            # Generate all pairs
-            all_pairs = list(combinations(sorted(postcode_coords.keys()), 2))
+            # Generate all pairs from UNIQUE postcodes only (driving time is the same for all duplicates)
+            unique_postcodes = sorted(postcode_coords.keys())
+            all_pairs = list(combinations(unique_postcodes, 2))
             
             self.log(f"Total pairs to calculate: {len(all_pairs)}")
             self.log(f"Estimated time: ~{len(all_pairs) * 1.2 / 60:.1f} minutes\n")
@@ -296,7 +309,8 @@ class PostcodeDistanceApp:
             self.log("\n" + "="*70)
             self.log("SUMMARY")
             self.log("="*70)
-            self.log(f"Postcodes processed: {len(postcode_coords)}")
+            self.log(f"Total locations processed: {len(postcode_data)} (including duplicates)")
+            self.log(f"Unique postcodes geocoded: {len(postcode_coords)}")
             self.log(f"Routes calculated: {len(results)}")
             self.log(f"\nFiles created:")
             self.log(f"  1. {coords_output}")
