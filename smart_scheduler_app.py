@@ -89,7 +89,7 @@ class SmartSchedulerApp:
         self.region_postcode_names = []  # Client names parallel to region_postcodes (for duplicates)
         self.appointments = {}  # {(date, time_slot): 'postcode'} - temporary/visual only
         self.pending_appointment = None  # Staged appointment: (date, time, postcode, duration) before submit
-        self.confirmed_appointments = {}  # Confirmed appointments: {postcode: (date, time, duration)} from CSV
+        self.confirmed_appointments = {}  # Confirmed appointments: {(postcode, date, time): (duration, in_outlook)} from CSV
         self.travel_segments = []  # List of (date, start_minutes, end_minutes, info_dict)
         self.conflicting_segments = set()  # Set of (date, start_minutes, end_minutes) tuples for conflicts
         
@@ -132,6 +132,32 @@ class SmartSchedulerApp:
         if self.project_dir:
             self.load_project_data()
             self.load_confirmed_appointments()
+    
+    def has_confirmed_appointment_at(self, postcode, date, time):
+        """Check if there's a confirmed appointment at specific postcode/date/time"""
+        return (postcode, date, time) in self.confirmed_appointments
+    
+    def get_confirmed_appointments_for_postcode(self, postcode):
+        """Get all confirmed appointments for a given postcode"""
+        return [(pc, d, t, dur, outlook) for (pc, d, t), (dur, outlook) in self.confirmed_appointments.items() if pc == postcode]
+    
+    def has_any_appointment_at_postcode(self, postcode):
+        """Check if there's any confirmed appointment at this postcode"""
+        return any(pc == postcode for pc, _, _ in self.confirmed_appointments.keys())
+    
+    def get_appointment_duration(self, postcode, date, time):
+        """Get duration for a specific appointment, or default if not found"""
+        key = (postcode, date, time)
+        if key in self.confirmed_appointments:
+            return self.confirmed_appointments[key][0]  # duration is first element
+        return int(self.appointment_duration_var.get()) if hasattr(self, 'appointment_duration_var') else 60
+    
+    def is_appointment_in_outlook(self, postcode, date, time):
+        """Check if appointment is in Outlook"""
+        key = (postcode, date, time)
+        if key in self.confirmed_appointments:
+            return self.confirmed_appointments[key][1]  # in_outlook is second element
+        return False
     
     def generate_time_slots(self):
         """Generate time slots based on start and end hours"""
@@ -688,7 +714,7 @@ class SmartSchedulerApp:
             self.travel_segments.clear()
             
             # Repopulate appointments from confirmed appointments
-            for postcode, (date, time, duration, in_outlook) in self.confirmed_appointments.items():
+            for (postcode, date, time), (duration, in_outlook) in self.confirmed_appointments.items():
                 cell_key = (date, time)
                 # Try to find the index in region_postcodes for duplicate handling
                 postcode_index = None
@@ -813,7 +839,7 @@ class SmartSchedulerApp:
         appointments_by_date = {}
         
         # Add confirmed appointments
-        for postcode, (date, time, duration, in_outlook) in self.confirmed_appointments.items():
+        for (postcode, date, time), (duration, in_outlook) in self.confirmed_appointments.items():
             if date not in appointments_by_date:
                 appointments_by_date[date] = []
             appointments_by_date[date].append((time, postcode, True))  # True = confirmed
@@ -889,7 +915,7 @@ class SmartSchedulerApp:
                                  label=date if not label_added else None)
         
         # Plot locations - highlight differently for scheduled vs unscheduled
-        scheduled_postcodes = set(self.confirmed_appointments.keys())
+        scheduled_postcodes = set(pc for pc, _, _ in self.confirmed_appointments.keys())
         selected_postcode = self.postcode_var.get()
         
         for _, row in region_data.iterrows():
@@ -998,10 +1024,7 @@ class SmartSchedulerApp:
                         else:
                             check_postcode = appt_data
                         # Get the actual duration of this appointment
-                        if check_postcode in self.confirmed_appointments:
-                            _, _, check_duration, _ = self.confirmed_appointments[check_postcode]
-                        else:
-                            check_duration = int(self.appointment_duration_var.get())
+                        check_duration = self.get_appointment_duration(check_postcode, date_str, check_time_slot)
                         
                         # Check if this appointment extends to cover the current slot
                         appt_start_minutes = self.time_to_minutes(check_time_slot)
@@ -1030,10 +1053,12 @@ class SmartSchedulerApp:
                     display_postcode = self.get_location_display(postcode, postcode_index)
                     
                     # Get duration - use stored duration for confirmed appointments, current setting for pending
-                    if postcode in self.confirmed_appointments:
+                    is_confirmed = self.has_confirmed_appointment_at(postcode, date_str, time_slot)
+                    if is_confirmed:
                         bg_color = '#90EE90'  # Light green for confirmed
                         # Get stored duration from confirmed appointments
-                        _, _, duration_minutes, in_outlook = self.confirmed_appointments[postcode]
+                        duration_minutes = self.get_appointment_duration(postcode, date_str, time_slot)
+                        in_outlook = self.is_appointment_in_outlook(postcode, date_str, time_slot)
                         # Add email indicator if synced to Outlook
                         display_text = f"{display_postcode} ✉" if in_outlook else display_postcode
                     else:
@@ -1041,12 +1066,13 @@ class SmartSchedulerApp:
                         # Use current duration setting for pending appointments
                         duration_minutes = int(self.appointment_duration_var.get())
                         display_text = display_postcode
+                        in_outlook = False
                     
                     # Calculate columnspan based on appointment duration (30-minute slots)
                     columnspan = duration_minutes // 30  # Each column is 30 minutes
                     
                     # Use larger font size if Outlook indicator is present for better visibility
-                    font_size = 9 if (postcode in self.confirmed_appointments and self.confirmed_appointments[postcode][3]) else 8
+                    font_size = 9 if in_outlook else 8
                     
                     cell = tk.Label(self.timetable_inner_frame, text=display_text, bg=bg_color,
                                    font=('Arial', font_size, 'bold'), width=8, height=3, relief=tk.RIDGE, bd=1,
@@ -1143,14 +1169,14 @@ class SmartSchedulerApp:
                 postcode = appt_data
             
             # Check if it's a confirmed appointment
-            if postcode in self.confirmed_appointments:
+            if self.has_confirmed_appointment_at(postcode, date_str, time_slot):
                 if self.show_yes_no_dialog("Remove Confirmed Appointment", 
                                        f"This is a confirmed appointment for {postcode}.\nAre you sure you want to remove it?"):
                     # Remove from confirmed appointments
-                    del self.confirmed_appointments[postcode]
+                    del self.confirmed_appointments[(postcode, date_str, time_slot)]
                     # Remove from CSV
                     df = pd.read_csv(self.appointments_csv)
-                    df = df[df['postcode'] != postcode]
+                    df = df[~((df['postcode'] == postcode) & (df['date'] == date_str) & (df['time'] == time_slot))]
                     df.to_csv(self.appointments_csv, index=False)
                     
                     del self.appointments[cell_key]
@@ -1201,35 +1227,6 @@ class SmartSchedulerApp:
         
         postcode = self.region_postcodes[selected_index]
         
-        # VALIDATION: Check if THIS LOCATION (by index, not just postcode) already has a confirmed appointment
-        # We check by location index to allow duplicate postcodes to each have appointments
-        location_has_confirmed = False
-        existing_date = None
-        existing_time = None
-        
-        for cell_key, appt_data in self.appointments.items():
-            # Extract index from appointment data
-            if isinstance(appt_data, tuple):
-                appt_index, appt_postcode = appt_data
-            else:
-                # Old format without index
-                continue
-            
-            # Check if this appointment's index matches the selected index
-            if appt_index == selected_index and appt_postcode in self.confirmed_appointments:
-                location_has_confirmed = True
-                existing_date, existing_time, _, _ = self.confirmed_appointments[appt_postcode]
-                break
-        
-        if location_has_confirmed:
-            client_name = self.region_postcode_names[selected_index] if selected_index < len(self.region_postcode_names) else None
-            location_display = f"{client_name} ({postcode})" if client_name else postcode
-            self.show_error_dialog(
-                "Duplicate Appointment",
-                f"Location {location_display} already has a confirmed appointment on {existing_date} at {existing_time}.\n\nOnly 1 appointment per location is allowed.\n\nPlease remove the existing appointment first if you need to reschedule."
-            )
-            return
-        
         # Temporarily add appointment to check for conflicts (store tuple of index and postcode)
         self.appointments[cell_key] = (selected_index, postcode)
         self.recalculate_travel_times(date_str)
@@ -1270,14 +1267,17 @@ class SmartSchedulerApp:
         
         # Get all appointments for this date with their time ranges
         appt_ranges = []
-        for (d, t), postcode in self.appointments.items():
+        for (d, t), appt_data in self.appointments.items():
             if d == date_str:
+                # Handle both old format (just postcode) and new format (index, postcode)
+                if isinstance(appt_data, tuple):
+                    _, postcode = appt_data
+                else:
+                    postcode = appt_data
+                    
                 start_min = self.time_to_minutes(t)
                 # Get actual duration for this appointment
-                if postcode in self.confirmed_appointments:
-                    _, _, duration, _ = self.confirmed_appointments[postcode]
-                else:
-                    duration = int(self.appointment_duration_var.get())
+                duration = self.get_appointment_duration(postcode, d, t)
                 end_min = start_min + duration
                 appt_ranges.append((start_min, end_min, t))
         
@@ -1346,11 +1346,10 @@ class SmartSchedulerApp:
             next_appt = processed_appointments[i + 1]
             
             current_postcode = current_appt[1]
+            current_date = current_appt[0][0]
+            current_time = current_appt[0][1]
             # Get actual duration for current appointment
-            if current_postcode in self.confirmed_appointments:
-                _, _, current_duration, _ = self.confirmed_appointments[current_postcode]
-            else:
-                current_duration = int(self.appointment_duration_var.get())
+            current_duration = self.get_appointment_duration(current_postcode, current_date, current_time)
             
             current_end_minutes = self.time_to_minutes(current_appt[0][1]) + current_duration
             next_start_minutes = self.time_to_minutes(next_appt[0][1])
@@ -1370,11 +1369,10 @@ class SmartSchedulerApp:
         # Add travel home after last appointment
         last_appt = processed_appointments[-1]
         last_postcode = last_appt[1]
+        last_date = last_appt[0][0]
+        last_time = last_appt[0][1]
         # Get actual duration for last appointment
-        if last_postcode in self.confirmed_appointments:
-            _, _, last_duration, _ = self.confirmed_appointments[last_postcode]
-        else:
-            last_duration = int(self.appointment_duration_var.get())
+        last_duration = self.get_appointment_duration(last_postcode, last_date, last_time)
         
         last_end_minutes = self.time_to_minutes(last_appt[0][1]) + last_duration
         
@@ -1470,32 +1468,75 @@ class SmartSchedulerApp:
             self.suggestions_text.config(state='disabled')
             return
         
-        # Get all postcodes except the selected one
-        other_postcodes = [pc for pc in self.region_postcodes if pc != postcode]
+        # Find the index of the selected postcode
+        selected_index = None
+        try:
+            selected_index = self.region_postcodes.index(postcode)
+        except ValueError:
+            pass
         
-        if not other_postcodes:
+        # Build list of all locations (using indices to get correct names for duplicates)
+        all_locations = []
+        for idx, pc in enumerate(self.region_postcodes):
+            if idx != selected_index:  # Exclude the selected postcode
+                client_name = self.region_postcode_names[idx] if idx < len(self.region_postcode_names) else None
+                all_locations.append((idx, pc, client_name))
+        
+        if not all_locations:
             self.suggestions_text.insert('1.0', f"{postcode} is the only postcode in this region.")
             self.suggestions_text.config(state='disabled')
             return
         
+        # Helper function to get region for a postcode
+        def get_postcode_region(pc):
+            if self.clustered_regions_df is not None:
+                region_row = self.clustered_regions_df[self.clustered_regions_df['postcode'] == pc]
+                if not region_row.empty:
+                    return int(region_row.iloc[0]['region'])
+            return None
+        
+        # Count scheduled appointments per client name within each region
+        region_client_counts = {}  # {region: {client_name: count}}
+        for (scheduled_pc, _, _) in self.confirmed_appointments.keys():
+            region = get_postcode_region(scheduled_pc)
+            # Need to find the client name from the original data
+            if self.clustered_regions_df is not None:
+                pc_rows = self.clustered_regions_df[self.clustered_regions_df['postcode'] == scheduled_pc]
+                for _, row in pc_rows.iterrows():
+                    client_name = row.get('client_name', None) if 'client_name' in row else None
+                    if client_name and pd.notna(client_name):
+                        client_name = str(client_name).strip()
+                        if client_name and region is not None:
+                            if region not in region_client_counts:
+                                region_client_counts[region] = {}
+                            if client_name not in region_client_counts[region]:
+                                region_client_counts[region][client_name] = 0
+                            region_client_counts[region][client_name] += 1
+        
         # Calculate travel times and sort by duration
         travel_info = []
-        for other_pc in other_postcodes:
+        for idx, other_pc, client_name in all_locations:
             travel_time = self.get_travel_time(postcode, other_pc)
-            is_scheduled = other_pc in self.confirmed_appointments
-            travel_info.append((travel_time, other_pc, is_scheduled))
+            is_scheduled = self.has_any_appointment_at_postcode(other_pc)
+            region = get_postcode_region(other_pc)
+            appt_count = 0
+            if region is not None and client_name and region in region_client_counts:
+                appt_count = region_client_counts[region].get(client_name, 0)
+            travel_info.append((travel_time, other_pc, is_scheduled, client_name, appt_count))
         
         # Sort by travel time (ascending)
         travel_info.sort()
         
         # Display header for travel times to other postcodes
         self.suggestions_text.insert(tk.END, f"Travel times from {postcode}:\n", 'header')
-        self.suggestions_text.insert(tk.END, f"{'Postcode':<12}{'Time (min)':<12}\n", 'normal')
-        self.suggestions_text.insert(tk.END, "-" * 40 + "\n", 'normal')
+        self.suggestions_text.insert(tk.END, f"{'Name':<25}{'Postcode':<12}{'Time':<8}{'Appts':<8}\n", 'normal')
+        self.suggestions_text.insert(tk.END, "-" * 58 + "\n", 'normal')
         
-        # Display each postcode with travel time
-        for travel_time, other_pc, is_scheduled in travel_info:
-            line = f"{other_pc:<12}{travel_time:<12}\n"
+        # Display each location with travel time and appointment count
+        for travel_time, other_pc, is_scheduled, client_name, appt_count in travel_info:
+            display_name = client_name if client_name else other_pc
+            count_str = f"({appt_count})" if appt_count > 0 else ""
+            line = f"{display_name:<25}{other_pc:<12}{travel_time} min  {count_str}\n"
             
             if is_scheduled:
                 # Highlight in red if already scheduled
@@ -1506,22 +1547,29 @@ class SmartSchedulerApp:
         # Add section for travel times to home base
         if self.home_postcode:
             self.suggestions_text.insert(tk.END, f"\nTravel times to {self.home_postcode} (Home):\n", 'header')
-            self.suggestions_text.insert(tk.END, f"{'Postcode':<12}{'Time (min)':<12}\n", 'normal')
-            self.suggestions_text.insert(tk.END, "-" * 40 + "\n", 'normal')
+            self.suggestions_text.insert(tk.END, f"{'Name':<25}{'Postcode':<12}{'Time':<8}{'Appts':<8}\n", 'normal')
+            self.suggestions_text.insert(tk.END, "-" * 58 + "\n", 'normal')
             
-            # Calculate travel times to home for all postcodes
+            # Calculate travel times to home for all postcodes (using indices to get correct names)
             home_travel_info = []
-            for pc in self.region_postcodes:
+            for idx, pc in enumerate(self.region_postcodes):
+                client_name = self.region_postcode_names[idx] if idx < len(self.region_postcode_names) else None
                 travel_time = self.get_travel_time(pc, self.home_postcode)
-                is_scheduled = pc in self.confirmed_appointments
-                home_travel_info.append((travel_time, pc, is_scheduled))
+                is_scheduled = self.has_any_appointment_at_postcode(pc)
+                region = get_postcode_region(pc)
+                appt_count = 0
+                if region is not None and client_name and region in region_client_counts:
+                    appt_count = region_client_counts[region].get(client_name, 0)
+                home_travel_info.append((travel_time, pc, is_scheduled, client_name, appt_count))
             
             # Sort by travel time
             home_travel_info.sort()
             
-            # Display each postcode with travel time to home
-            for travel_time, pc, is_scheduled in home_travel_info:
-                line = f"{pc:<12}{travel_time:<12}\n"
+            # Display each location with travel time to home and appointment count
+            for travel_time, pc, is_scheduled, client_name, appt_count in home_travel_info:
+                display_name = client_name if client_name else pc
+                count_str = f"({appt_count})" if appt_count > 0 else ""
+                line = f"{display_name:<25}{pc:<12}{travel_time} min  {count_str}\n"
                 
                 if is_scheduled:
                     self.suggestions_text.insert(tk.END, line, 'scheduled')
@@ -1540,7 +1588,7 @@ class SmartSchedulerApp:
         region_postcodes_set = set(self.region_postcodes)
         
         # Check if there are any appointments in this region
-        region_appointments = {pc: data for pc, data in self.confirmed_appointments.items() if pc in region_postcodes_set}
+        region_appointments = [(pc, d, t) for (pc, d, t) in self.confirmed_appointments.keys() if pc in region_postcodes_set]
         region_pending = self.pending_appointment and self.pending_appointment[2] in region_postcodes_set
         
         if not region_appointments and not region_pending:
@@ -1562,8 +1610,8 @@ class SmartSchedulerApp:
                     del self.appointments[cell_key]
             
             # Clear confirmed appointments for postcodes in this region
-            for postcode in list(region_appointments.keys()):
-                del self.confirmed_appointments[postcode]
+            for key in list(region_appointments):
+                del self.confirmed_appointments[key]
             
             # Clear pending if it's in this region
             if region_pending:
@@ -1600,11 +1648,8 @@ class SmartSchedulerApp:
             # Also update the map to highlight the selected postcode
             self.update_region_visualization()
             
-            # Enable/disable the offer slots button based on whether postcode has confirmed appointment
-            if postcode in self.confirmed_appointments:
-                self.offer_slots_btn.config(state='disabled')
-            else:
-                self.offer_slots_btn.config(state='normal')
+            # Don't disable the offer slots button - we now allow duplicate appointments at same location
+            self.offer_slots_btn.config(state='normal')
         else:
             self.offer_slots_btn.config(state='disabled')
     
@@ -1726,7 +1771,7 @@ class SmartSchedulerApp:
             return
         
         # Count how many need syncing
-        to_sync = [(pc, data) for pc, data in self.confirmed_appointments.items() if not data[3]]  # data[3] is in_outlook
+        to_sync = [(key, data) for key, data in self.confirmed_appointments.items() if not data[1]]  # data[1] is in_outlook
         
         if not to_sync:
             self.show_info_dialog("Already Synced", "All appointments are already in Outlook!")
@@ -1752,7 +1797,7 @@ class SmartSchedulerApp:
             created_count = 0
             failed = []
             
-            for postcode, (date, time_str, duration, in_outlook) in to_sync:
+            for (postcode, date, time_str), (duration, in_outlook) in to_sync:
                 try:
                     # Get region color for this postcode
                     color_code = self.get_region_color_for_postcode(postcode)
@@ -1763,17 +1808,18 @@ class SmartSchedulerApp:
                     if self.create_outlook_appointment(outlook, postcode, date, time_str, duration, category_name, color_code):
                         created_count += 1
                         # Update in memory
-                        self.confirmed_appointments[postcode] = (date, time_str, duration, True)
+                        self.confirmed_appointments[(postcode, date, time_str)] = (duration, True)
                     else:
-                        failed.append(postcode)
+                        failed.append(f"{postcode} @ {date} {time_str}")
                 except Exception as e:
-                    failed.append(f"{postcode} ({str(e)})")
+                    failed.append(f"{postcode} @ {date} {time_str} ({str(e)})")
                     print(f"Error syncing {postcode}: {e}")
             
             # Update CSV with in_outlook flag
             df = pd.read_csv(self.appointments_csv)
-            for postcode in [pc for pc, _ in to_sync if pc not in failed]:
-                df.loc[df['postcode'] == postcode, 'in_outlook'] = True
+            for (postcode, date, time_str), _ in to_sync:
+                if f"{postcode} @ {date} {time_str}" not in failed:
+                    df.loc[(df['postcode'] == postcode) & (df['date'] == date) & (df['time'] == time_str), 'in_outlook'] = True
             df.to_csv(self.appointments_csv, index=False)
             
             # Show results
@@ -1810,10 +1856,10 @@ class SmartSchedulerApp:
             duration = int(row['duration']) if 'duration' in row and pd.notna(row['duration']) else 60
             # Track if appointment is in Outlook (default to False for backward compatibility)
             in_outlook = bool(row['in_outlook']) if 'in_outlook' in row and pd.notna(row['in_outlook']) else False
-            self.confirmed_appointments[postcode] = (date, time, duration, in_outlook)
+            self.confirmed_appointments[(postcode, date, time)] = (duration, in_outlook)
         
         # Also add to visual appointments dict and recalculate travel
-        for postcode, (date, time, duration, in_outlook) in self.confirmed_appointments.items():
+        for (postcode, date, time), (duration, in_outlook) in self.confirmed_appointments.items():
             # Try to find the index in region_postcodes for duplicate handling
             postcode_index = None
             if postcode in self.region_postcodes:
@@ -1844,15 +1890,6 @@ class SmartSchedulerApp:
         # Convert display text to actual postcode for storage
         actual_postcode = self.display_text_to_postcode(postcode)
         
-        # Validation: Check if this postcode already has a confirmed appointment
-        if actual_postcode in self.confirmed_appointments:
-            existing_date, existing_time, existing_duration, _ = self.confirmed_appointments[actual_postcode]
-            self.show_error_dialog(
-                "Duplicate Location", 
-                f"Location {postcode} already has a confirmed appointment on {existing_date} at {existing_time}.\\n\\nOnly 1 appointment per location is allowed."
-            )
-            return
-        
         # Show custom dialog with Outlook checkbox
         add_to_outlook = self.show_submit_dialog(postcode, date, time, duration)
         
@@ -1874,7 +1911,7 @@ class SmartSchedulerApp:
                 outlook_success = False
         
         # Save to confirmed appointments (with outlook status) using actual postcode
-        self.confirmed_appointments[actual_postcode] = (date, time, duration, outlook_success if add_to_outlook else False)
+        self.confirmed_appointments[(actual_postcode, date, time)] = (duration, outlook_success if add_to_outlook else False)
         
         # Add to CSV using actual postcode
         df = pd.read_csv(self.appointments_csv)
@@ -1996,15 +2033,15 @@ class SmartSchedulerApp:
                     
                     # If there's an appointment in another slot, check if it overlaps
                     if other_cell_key in self.appointments:
-                        # Get the duration of the other appointment (default to 30 min if not found)
-                        other_duration = 30
-                        if other_cell_key[1] in self.appointments:
-                            # Try to find duration from confirmed appointments
-                            for pc, (app_date, app_time, app_duration, _) in self.confirmed_appointments.items():
-                                if app_date == date_str and app_time == other_slot:
-                                    other_duration = app_duration
-                                    break
+                        # Handle both old format (just postcode) and new format (index, postcode)
+                        appt_data = self.appointments[other_cell_key]
+                        if isinstance(appt_data, tuple):
+                            _, other_postcode = appt_data
+                        else:
+                            other_postcode = appt_data
                         
+                        # Get the duration of the other appointment
+                        other_duration = self.get_appointment_duration(other_postcode, date_str, other_slot)
                         other_end_minutes = other_start_minutes + other_duration
                         
                         # Check for overlap: new appointment and existing appointment
