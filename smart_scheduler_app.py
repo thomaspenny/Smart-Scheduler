@@ -31,7 +31,6 @@ except ImportError:
     def get_show_names(): return False
     def set_show_names(val): pass
     def register_callback(func): pass
-    def format_location_raw(postcode, name, show_names): return postcode
 
 # Outlook Category Colors Enumeration (OlCategoryColor)
 OUTLOOK_COLORS = {
@@ -98,7 +97,6 @@ class SmartSchedulerApp:
         self.end_hour = 19
         self.appointment_duration = 60  # Appointment duration in minutes (default 1 hour)
         self.max_appointments_per_day = 4
-        self.route_efficiency_threshold = 1.3  # Routes can be max 130% of optimal
         
         # Time slots (30-minute intervals from start to end hour)
         self.generate_time_slots()
@@ -134,29 +132,41 @@ class SmartSchedulerApp:
             self.load_confirmed_appointments()
     
     def has_confirmed_appointment_at(self, postcode, date, time):
-        """Check if there's a confirmed appointment at specific postcode/date/time"""
-        return (postcode, date, time) in self.confirmed_appointments
-    
-    def get_confirmed_appointments_for_postcode(self, postcode):
-        """Get all confirmed appointments for a given postcode"""
-        return [(pc, d, t, dur, outlook) for (pc, d, t), (dur, outlook) in self.confirmed_appointments.items() if pc == postcode]
+        """Check if there's a confirmed appointment at specific date/time (search by postcode, date, time)"""
+        # Find if any appointment matches this date and time with the given postcode
+        for (client_name, d, t), (pc, dur, outlook) in self.confirmed_appointments.items():
+            if d == date and t == time and pc == postcode:
+                return True
+        return False
+
+    def get_confirmed_client_name(self, postcode, date, time):
+        """Get client_name for a confirmed appointment at postcode/date/time."""
+        for (client_name, d, t), (pc, dur, outlook) in self.confirmed_appointments.items():
+            if d == date and t == time and pc == postcode:
+                return client_name
+        return None
     
     def has_any_appointment_at_postcode(self, postcode):
         """Check if there's any confirmed appointment at this postcode"""
-        return any(pc == postcode for pc, _, _ in self.confirmed_appointments.keys())
+        for (cn, d, t), (pc, dur, outlook) in self.confirmed_appointments.items():
+            if pc == postcode:
+                return True
+        return False
     
     def get_appointment_duration(self, postcode, date, time):
         """Get duration for a specific appointment, or default if not found"""
-        key = (postcode, date, time)
-        if key in self.confirmed_appointments:
-            return self.confirmed_appointments[key][0]  # duration is first element
+        # Search for appointment matching postcode, date, and time
+        for (client_name, d, t), (pc, dur, outlook) in self.confirmed_appointments.items():
+            if pc == postcode and d == date and t == time:
+                return dur  # duration is second element of value tuple
         return int(self.appointment_duration_var.get()) if hasattr(self, 'appointment_duration_var') else 60
     
     def is_appointment_in_outlook(self, postcode, date, time):
         """Check if appointment is in Outlook"""
-        key = (postcode, date, time)
-        if key in self.confirmed_appointments:
-            return self.confirmed_appointments[key][1]  # in_outlook is second element
+        # Search for appointment matching postcode, date, and time
+        for (client_name, d, t), (pc, dur, outlook) in self.confirmed_appointments.items():
+            if pc == postcode and d == date and t == time:
+                return outlook  # in_outlook is third element of value tuple
         return False
     
     def generate_time_slots(self):
@@ -226,16 +236,46 @@ class SmartSchedulerApp:
         postcode_row = self.clustered_regions_df[self.clustered_regions_df['postcode'] == postcode]
         if len(postcode_row) > 0:
             row = postcode_row.iloc[0]
-            client_name = row.get('client_name', None) if hasattr(row, 'get') else (row['client_name'] if 'client_name' in row.index else None)
-            if client_name and pd.notna(client_name):
-                client_name = str(client_name).strip()
-                if not client_name:
+            client_name = None
+            if 'client_name' in row.index:
+                client_name = row['client_name']
+                if pd.notna(client_name):
+                    client_name = str(client_name).strip()
+                    if not client_name:
+                        client_name = None
+                else:
                     client_name = None
             else:
                 client_name = None
             return self.format_postcode_display(postcode, client_name)[0]
         
         return self.format_postcode_display(postcode)[0]
+
+    def find_region_postcode_index(self, postcode, client_name=None):
+        """Find the best matching index in region lists for a postcode/client_name pair.
+        This avoids mismatched names when duplicate postcodes exist."""
+        if postcode is None:
+            return None
+
+        postcode_norm = str(postcode).strip().upper()
+
+        # First pass: exact postcode + client_name match when a name is available
+        if client_name is not None:
+            name_norm = str(client_name).strip().casefold()
+            for idx, pc in enumerate(self.region_postcodes):
+                pc_norm = str(pc).strip().upper()
+                if pc_norm != postcode_norm:
+                    continue
+                row_name = self.region_postcode_names[idx] if idx < len(self.region_postcode_names) else None
+                if row_name is not None and str(row_name).strip().casefold() == name_norm:
+                    return idx
+
+        # Fallback: first postcode match
+        for idx, pc in enumerate(self.region_postcodes):
+            if str(pc).strip().upper() == postcode_norm:
+                return idx
+
+        return None
     
     def update_all_displays(self):
         """Update all postcode displays after preference change"""
@@ -243,18 +283,27 @@ class SmartSchedulerApp:
             # Update postcode combobox
             if self.selected_region and self.clustered_regions_df is not None:
                 region_data = self.clustered_regions_df[self.clustered_regions_df['region'] == self.selected_region]
-                region_data = region_data.sort_values('postcode')  # Sort to keep lists in sync
+                # Deterministic ordering for duplicate postcodes
+                if 'client_name' in region_data.columns:
+                    region_data = region_data.sort_values(['postcode', 'client_name'], na_position='last', kind='mergesort')
+                else:
+                    region_data = region_data.sort_values('postcode', kind='mergesort')
                 self.region_postcodes = region_data['postcode'].tolist()  # Keep all including duplicates
                 # Store client names parallel to postcodes for duplicate handling
                 self.region_postcode_names = []
                 display_list = []
                 for _, row in region_data.iterrows():
                     pc = row['postcode']
-                    client_name = row.get('client_name', None) if hasattr(row, 'get') else None
-                    if client_name and pd.notna(client_name):
-                        client_name = str(client_name).strip() if client_name.strip() else None
-                    else:
-                        client_name = None
+                    # Properly extract client_name from pandas Series
+                    client_name = None
+                    if 'client_name' in row.index:
+                        client_name = row['client_name']
+                        if pd.notna(client_name):
+                            client_name = str(client_name).strip()
+                            if not client_name:
+                                client_name = None
+                        else:
+                            client_name = None
                     self.region_postcode_names.append(client_name)
                     if 'client_name' in region_data.columns:
                         display_text = self.format_postcode_display(pc, client_name)[0]
@@ -714,24 +763,20 @@ class SmartSchedulerApp:
             self.travel_segments.clear()
             
             # Repopulate appointments from confirmed appointments
-            for (postcode, date, time), (duration, in_outlook) in self.confirmed_appointments.items():
+            for (client_name, date, time), (postcode, duration, in_outlook) in self.confirmed_appointments.items():
                 cell_key = (date, time)
-                # Try to find the index in region_postcodes for duplicate handling
-                postcode_index = None
-                if postcode in self.region_postcodes:
-                    postcode_index = self.region_postcodes.index(postcode)
+                postcode_index = self.find_region_postcode_index(postcode, client_name)
+                if postcode_index is not None:
                     self.appointments[cell_key] = (postcode_index, postcode)
                 else:
                     self.appointments[cell_key] = postcode
             
             # Also add pending appointment if exists
             if self.pending_appointment:
-                pending_date, pending_time, pending_postcode, pending_duration = self.pending_appointment
+                pending_date, pending_time, pending_postcode, pending_duration, pending_client_name = self.pending_appointment
                 cell_key = (pending_date, pending_time)
-                # Try to find index for pending appointment too
-                postcode_index = None
-                if pending_postcode in self.region_postcodes:
-                    postcode_index = self.region_postcodes.index(pending_postcode)
+                postcode_index = self.find_region_postcode_index(pending_postcode, pending_client_name)
+                if postcode_index is not None:
                     self.appointments[cell_key] = (postcode_index, pending_postcode)
                 else:
                     self.appointments[cell_key] = pending_postcode
@@ -766,20 +811,27 @@ class SmartSchedulerApp:
         self.region_postcode_names = []  # Reset parallel names list
         if self.clustered_regions_df is not None:
             region_data = self.clustered_regions_df[self.clustered_regions_df['region'] == region_id]
-            region_data = region_data.sort_values('postcode')  # Sort to keep lists in sync
+            # Deterministic ordering for duplicate postcodes
+            if 'client_name' in region_data.columns:
+                region_data = region_data.sort_values(['postcode', 'client_name'], na_position='last', kind='mergesort')
+            else:
+                region_data = region_data.sort_values('postcode', kind='mergesort')
             self.region_postcodes = region_data['postcode'].tolist()  # Keep all including duplicates
             
             # Format display with names or postcodes
             display_list = []
+            self.region_postcode_names = []  # Store names parallel to postcodes
             for _, row in region_data.iterrows():
                 pc = row['postcode']
-                client_name = row.get('client_name', None) if hasattr(row, 'get') else (row['client_name'] if 'client_name' in row else None)
-                if client_name and pd.notna(client_name):
-                    client_name = str(client_name).strip()
-                    if not client_name:
+                client_name = None
+                if 'client_name' in row.index:
+                    client_name = row['client_name']
+                    if pd.notna(client_name):
+                        client_name = str(client_name).strip()
+                        if not client_name:
+                            client_name = None
+                    else:
                         client_name = None
-                else:
-                    client_name = None
                 self.region_postcode_names.append(client_name)
                 display_list.append(self.format_postcode_display(pc, client_name)[0])
             
@@ -839,14 +891,14 @@ class SmartSchedulerApp:
         appointments_by_date = {}
         
         # Add confirmed appointments
-        for (postcode, date, time), (duration, in_outlook) in self.confirmed_appointments.items():
+        for (client_name, date, time), (postcode, duration, in_outlook) in self.confirmed_appointments.items():
             if date not in appointments_by_date:
                 appointments_by_date[date] = []
             appointments_by_date[date].append((time, postcode, True))  # True = confirmed
         
         # Add pending appointment if it exists
         if self.pending_appointment:
-            pending_date, pending_time, pending_postcode, pending_duration = self.pending_appointment
+            pending_date, pending_time, pending_postcode, pending_duration, pending_client_name = self.pending_appointment
             if pending_date not in appointments_by_date:
                 appointments_by_date[pending_date] = []
             appointments_by_date[pending_date].append((pending_time, pending_postcode, False))  # False = pending
@@ -915,7 +967,7 @@ class SmartSchedulerApp:
                                  label=date if not label_added else None)
         
         # Plot locations - highlight differently for scheduled vs unscheduled
-        scheduled_postcodes = set(pc for pc, _, _ in self.confirmed_appointments.keys())
+        scheduled_postcodes = set(pc for (cn, d, t), (pc, dur, outlook) in self.confirmed_appointments.items())
         selected_postcode = self.postcode_var.get()
         
         for _, row in region_data.iterrows():
@@ -1049,12 +1101,15 @@ class SmartSchedulerApp:
                         postcode = appt_data
                         postcode_index = None
                     
-                    # Format display with name or postcode (use index for correct duplicate handling)
-                    display_postcode = self.get_location_display(postcode, postcode_index)
-                    
                     # Get duration - use stored duration for confirmed appointments, current setting for pending
                     is_confirmed = self.has_confirmed_appointment_at(postcode, date_str, time_slot)
                     if is_confirmed:
+                        # Use confirmed client_name directly so duplicate postcodes never show the wrong person
+                        confirmed_name = self.get_confirmed_client_name(postcode, date_str, time_slot)
+                        if confirmed_name:
+                            display_postcode = self.format_postcode_display(postcode, confirmed_name)[0]
+                        else:
+                            display_postcode = self.get_location_display(postcode, postcode_index)
                         bg_color = '#90EE90'  # Light green for confirmed
                         # Get stored duration from confirmed appointments
                         duration_minutes = self.get_appointment_duration(postcode, date_str, time_slot)
@@ -1062,6 +1117,16 @@ class SmartSchedulerApp:
                         # Add email indicator if synced to Outlook
                         display_text = f"{display_postcode} ✉" if in_outlook else display_postcode
                     else:
+                        # Pending: prefer the staged client_name for exact duplicate-postcode identity
+                        pending_name = None
+                        if self.pending_appointment:
+                            p_date, p_time, p_postcode, p_duration, p_client_name = self.pending_appointment
+                            if p_date == date_str and p_time == time_slot and p_postcode == postcode:
+                                pending_name = p_client_name
+                        if pending_name:
+                            display_postcode = self.format_postcode_display(postcode, pending_name)[0]
+                        else:
+                            display_postcode = self.get_location_display(postcode, postcode_index)
                         bg_color = '#228B22'  # Forest green for pending (darker)
                         # Use current duration setting for pending appointments
                         duration_minutes = int(self.appointment_duration_var.get())
@@ -1172,8 +1237,14 @@ class SmartSchedulerApp:
             if self.has_confirmed_appointment_at(postcode, date_str, time_slot):
                 if self.show_yes_no_dialog("Remove Confirmed Appointment", 
                                        f"This is a confirmed appointment for {postcode}.\nAre you sure you want to remove it?"):
-                    # Remove from confirmed appointments
-                    del self.confirmed_appointments[(postcode, date_str, time_slot)]
+                    # Find and remove from confirmed appointments by searching (client_name, date, time)
+                    for key in list(self.confirmed_appointments.keys()):
+                        client_name, d, t = key
+                        pc, dur, outlook = self.confirmed_appointments[key]
+                        if pc == postcode and d == date_str and t == time_slot:
+                            del self.confirmed_appointments[key]
+                            break
+                    
                     # Remove from CSV
                     df = pd.read_csv(self.appointments_csv)
                     df = df[~((df['postcode'] == postcode) & (df['date'] == date_str) & (df['time'] == time_slot))]
@@ -1201,7 +1272,7 @@ class SmartSchedulerApp:
         
         # Check if there's already a pending appointment
         if self.pending_appointment:
-            pending_date, pending_time, pending_postcode, pending_duration = self.pending_appointment
+            pending_date, pending_time, pending_postcode, pending_duration, pending_client_name = self.pending_appointment
             response = self.show_yes_no_dialog(
                 "Replace Pending Appointment?",
                 f"You already have a pending appointment:\n{pending_postcode} on {pending_date} at {pending_time} ({pending_duration} min)\n\nDo you want to replace it with a new selection?\n\n(Submit the current appointment first to keep it)"
@@ -1226,6 +1297,8 @@ class SmartSchedulerApp:
             return
         
         postcode = self.region_postcodes[selected_index]
+        # Get client name from parallel list (handles duplicates correctly)
+        client_name = self.region_postcode_names[selected_index] if selected_index < len(self.region_postcode_names) else None
         
         # Temporarily add appointment to check for conflicts (store tuple of index and postcode)
         self.appointments[cell_key] = (selected_index, postcode)
@@ -1244,7 +1317,7 @@ class SmartSchedulerApp:
         
         # Stage as pending appointment with current duration setting
         current_duration = int(self.appointment_duration_var.get())
-        self.pending_appointment = (date_str, time_slot, postcode, current_duration)
+        self.pending_appointment = (date_str, time_slot, postcode, current_duration, client_name)
         self.pending_label.config(text=f"Pending: {postcode} on {date_str} at {time_slot} ({current_duration} min)")
         
         # Update display
@@ -1497,21 +1570,14 @@ class SmartSchedulerApp:
         
         # Count scheduled appointments per client name within each region
         region_client_counts = {}  # {region: {client_name: count}}
-        for (scheduled_pc, _, _) in self.confirmed_appointments.keys():
+        for (client_name, d, t), (scheduled_pc, dur, outlook) in self.confirmed_appointments.items():
             region = get_postcode_region(scheduled_pc)
-            # Need to find the client name from the original data
-            if self.clustered_regions_df is not None:
-                pc_rows = self.clustered_regions_df[self.clustered_regions_df['postcode'] == scheduled_pc]
-                for _, row in pc_rows.iterrows():
-                    client_name = row.get('client_name', None) if 'client_name' in row else None
-                    if client_name and pd.notna(client_name):
-                        client_name = str(client_name).strip()
-                        if client_name and region is not None:
-                            if region not in region_client_counts:
-                                region_client_counts[region] = {}
-                            if client_name not in region_client_counts[region]:
-                                region_client_counts[region][client_name] = 0
-                            region_client_counts[region][client_name] += 1
+            if client_name and region is not None:
+                if region not in region_client_counts:
+                    region_client_counts[region] = {}
+                if client_name not in region_client_counts[region]:
+                    region_client_counts[region][client_name] = 0
+                region_client_counts[region][client_name] += 1
         
         # Calculate travel times and sort by duration
         travel_info = []
@@ -1588,7 +1654,7 @@ class SmartSchedulerApp:
         region_postcodes_set = set(self.region_postcodes)
         
         # Check if there are any appointments in this region
-        region_appointments = [(pc, d, t) for (pc, d, t) in self.confirmed_appointments.keys() if pc in region_postcodes_set]
+        region_appointments = [(cn, d, t) for (cn, d, t), (pc, dur, outlook) in self.confirmed_appointments.items() if pc in region_postcodes_set]
         region_pending = self.pending_appointment and self.pending_appointment[2] in region_postcodes_set
         
         if not region_appointments and not region_pending:
@@ -1725,8 +1791,9 @@ class SmartSchedulerApp:
                     locations_list = []
                     for _, row in region_data.iterrows():
                         pc = row['postcode'].strip().upper()
-                        name = row.get('client_name', '') if 'client_name' in row else ''
-                        name = str(name).strip() if name else ''
+                        name = ''
+                        if 'client_name' in row.index and pd.notna(row['client_name']):
+                            name = str(row['client_name']).strip()
                         locations_list.append(f"  • {pc}: {name}" if name else f"  • {pc}")
                     
                     region_locations = f"\nLocations in Region {region_num}:\n" + "\n".join(sorted(locations_list))
@@ -1770,8 +1837,8 @@ class SmartSchedulerApp:
             self.show_info_dialog("No Appointments", "No confirmed appointments to sync.")
             return
         
-        # Count how many need syncing
-        to_sync = [(key, data) for key, data in self.confirmed_appointments.items() if not data[1]]  # data[1] is in_outlook
+        # Count how many need syncing - data[2] is in_outlook (third element)
+        to_sync = [(key, data) for key, data in self.confirmed_appointments.items() if not data[2]]  # data[2] is in_outlook
         
         if not to_sync:
             self.show_info_dialog("Already Synced", "All appointments are already in Outlook!")
@@ -1797,7 +1864,7 @@ class SmartSchedulerApp:
             created_count = 0
             failed = []
             
-            for (postcode, date, time_str), (duration, in_outlook) in to_sync:
+            for (client_name, date, time_str), (postcode, duration, in_outlook) in to_sync:
                 try:
                     # Get region color for this postcode
                     color_code = self.get_region_color_for_postcode(postcode)
@@ -1808,7 +1875,7 @@ class SmartSchedulerApp:
                     if self.create_outlook_appointment(outlook, postcode, date, time_str, duration, category_name, color_code):
                         created_count += 1
                         # Update in memory
-                        self.confirmed_appointments[(postcode, date, time_str)] = (duration, True)
+                        self.confirmed_appointments[(client_name, date, time_str)] = (postcode, duration, True)
                     else:
                         failed.append(f"{postcode} @ {date} {time_str}")
                 except Exception as e:
@@ -1817,7 +1884,7 @@ class SmartSchedulerApp:
             
             # Update CSV with in_outlook flag
             df = pd.read_csv(self.appointments_csv)
-            for (postcode, date, time_str), _ in to_sync:
+            for (client_name, date, time_str), (postcode, dur, in_outlook) in to_sync:
                 if f"{postcode} @ {date} {time_str}" not in failed:
                     df.loc[(df['postcode'] == postcode) & (df['date'] == date) & (df['time'] == time_str), 'in_outlook'] = True
             df.to_csv(self.appointments_csv, index=False)
@@ -1841,7 +1908,7 @@ class SmartSchedulerApp:
         """Load confirmed appointments from CSV"""
         if not self.appointments_csv.exists():
             # Create empty CSV with headers
-            df = pd.DataFrame(columns=['postcode', 'date', 'time', 'duration', 'in_outlook'])
+            df = pd.DataFrame(columns=['client_name', 'postcode', 'date', 'time', 'duration', 'in_outlook'])
             df.to_csv(self.appointments_csv, index=False)
             return
         
@@ -1852,19 +1919,24 @@ class SmartSchedulerApp:
             postcode = row['postcode']
             date = row['date']
             time = row['time']
+            # Get client_name from CSV (for backward compatibility, handle missing column)
+            client_name = None
+            if 'client_name' in row and pd.notna(row['client_name']):
+                client_name = str(row['client_name']).strip()
+                if not client_name:
+                    client_name = None
             # Default to 60 minutes if duration column doesn't exist (backward compatibility)
             duration = int(row['duration']) if 'duration' in row and pd.notna(row['duration']) else 60
             # Track if appointment is in Outlook (default to False for backward compatibility)
             in_outlook = bool(row['in_outlook']) if 'in_outlook' in row and pd.notna(row['in_outlook']) else False
-            self.confirmed_appointments[(postcode, date, time)] = (duration, in_outlook)
+            # Use client_name as part of the key (unique identifier) instead of postcode
+            # This prevents duplicate clients with same postcode from overwriting each other
+            self.confirmed_appointments[(client_name, date, time)] = (postcode, duration, in_outlook)
         
         # Also add to visual appointments dict and recalculate travel
-        for (postcode, date, time), (duration, in_outlook) in self.confirmed_appointments.items():
-            # Try to find the index in region_postcodes for duplicate handling
-            postcode_index = None
-            if postcode in self.region_postcodes:
-                # Find first occurrence (best we can do when loading from CSV without location_id)
-                postcode_index = self.region_postcodes.index(postcode)
+        for (client_name, date, time), (postcode, duration, in_outlook) in self.confirmed_appointments.items():
+            postcode_index = self.find_region_postcode_index(postcode, client_name)
+            if postcode_index is not None:
                 self.appointments[(date, time)] = (postcode_index, postcode)
             else:
                 # Postcode not in current region, store without index
@@ -1885,7 +1957,7 @@ class SmartSchedulerApp:
             self.show_info_dialog("No Appointment", "No appointment selected to submit.")
             return
         
-        date, time, postcode, duration = self.pending_appointment
+        date, time, postcode, duration, client_name = self.pending_appointment
         
         # Convert display text to actual postcode for storage
         actual_postcode = self.display_text_to_postcode(postcode)
@@ -1910,12 +1982,14 @@ class SmartSchedulerApp:
                 self.show_error_dialog("Outlook Error", f"Failed to create Outlook appointment:\\n{e}")
                 outlook_success = False
         
-        # Save to confirmed appointments (with outlook status) using actual postcode
-        self.confirmed_appointments[(actual_postcode, date, time)] = (duration, outlook_success if add_to_outlook else False)
+        # Save to confirmed appointments (with outlook status) using client_name as key
+        # This prevents duplicate clients with same postcode from overwriting each other
+        self.confirmed_appointments[(client_name, date, time)] = (actual_postcode, duration, outlook_success if add_to_outlook else False)
         
-        # Add to CSV using actual postcode
+        # Add to CSV using client_name and postcode
         df = pd.read_csv(self.appointments_csv)
         new_row = pd.DataFrame([{
+            'client_name': client_name if client_name else '',
             'postcode': actual_postcode, 
             'date': date, 
             'time': time, 

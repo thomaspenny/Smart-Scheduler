@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, scrolledtext
+from tkinter import ttk, filedialog, messagebox, scrolledtext, simpledialog
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -2036,7 +2036,7 @@ class TSPClusteringApp:
         self.toolbar = toolbar
     
     def show_edit_regions_dialog(self):
-        """Show dialog for editing location regions manually"""
+        """Show dialog with table + region dropdowns for all locations"""
         if not self.has_results:
             messagebox.showwarning("No Results", 
                                   "No clustering results available.\n\n"
@@ -2044,177 +2044,256 @@ class TSPClusteringApp:
             return
         
         dialog = tk.Toplevel(self.root)
-        dialog.title("Edit Location's Region")
-        dialog.geometry("550x400")
+        dialog.title("Edit Location Regions")
+        dialog.geometry("1100x720")
         dialog.transient(self.root)
         dialog.grab_set()
         
-        frame = ttk.Frame(dialog, padding="20")
-        frame.pack(fill=tk.BOTH, expand=True)
+        main_frame = ttk.Frame(dialog, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
         
-        ttk.Label(frame, text="Edit Location's Region", font=('Arial', 14, 'bold')).pack(pady=(0, 20))
-        
-        # Instructions
-        instructions = ttk.Label(frame, text="Select a postcode and assign it to a different region or exclude it.",
-                                font=('Arial', 9), foreground='gray')
-        instructions.pack(pady=(0, 15))
-        
-        # Location selection
-        postcode_frame = ttk.Frame(frame)
-        postcode_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Label(postcode_frame, text="Location:", font=('Arial', 10)).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(main_frame, text="Edit Location Regions", font=('Arial', 14, 'bold')).pack(anchor=tk.W, pady=(0, 6))
+        instructions = ttk.Label(
+            main_frame,
+            text="Use the Region dropdown on each row. Choose 'Create New Region...' to add any region number.",
+            font=('Arial', 9),
+            foreground='gray'
+        )
+        instructions.pack(anchor=tk.W, pady=(0, 10))
         
         # Ensure unique location IDs exist
         self.clustered_results = self._assign_location_instance_ids(self.clustered_results)
-
-        # Build selectable location labels (distinct even for duplicate postcodes)
         editable_df = self.clustered_results[self.clustered_results['region'] != 0].copy()
-        postcode_counts = editable_df['postcode'].value_counts().to_dict()
-        selection_map = {}
-        selection_values = []
+        editable_df = editable_df.sort_values(['region', 'postcode'], kind='mergesort')
+        
+        # Build dynamic region list from current data + known cluster count
+        existing_regions = set()
+        for region_val in editable_df['region'].tolist():
+            if pd.notna(region_val):
+                region_int = int(region_val)
+                if region_int > 0:
+                    existing_regions.add(region_int)
+        for i in range(1, int(self.n_clusters) + 1):
+            existing_regions.add(i)
+        
+        def to_region_label(region_value):
+            return "Excluded" if int(region_value) == -1 else f"Region {int(region_value)}"
+        
+        def region_options():
+            ordered = [f"Region {r}" for r in sorted(existing_regions)]
+            return ordered + ["Excluded", "Create New Region..."]
+        
+        # Header row
+        header = ttk.Frame(main_frame)
+        header.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(header, text="Postcode", width=16, anchor='w', font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(header, text="Client Name", width=34, anchor='w', font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(header, text="Region", width=22, anchor='w', font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Label(header, text="Color", width=18, anchor='w', font=('Arial', 9, 'bold')).pack(side=tk.LEFT)
+        
+        # Scrollable rows area
+        table_container = ttk.Frame(main_frame)
+        table_container.pack(fill=tk.BOTH, expand=True)
+        
+        canvas = tk.Canvas(table_container, highlightthickness=0)
+        y_scroll = ttk.Scrollbar(table_container, orient=tk.VERTICAL, command=canvas.yview)
+        rows_frame = ttk.Frame(canvas)
+        
+        rows_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        window_id = canvas.create_window((0, 0), window=rows_frame, anchor="nw")
+        canvas.configure(yscrollcommand=y_scroll.set)
+        
+        def resize_rows_frame(event):
+            canvas.itemconfigure(window_id, width=event.width)
+        
+        canvas.bind("<Configure>", resize_rows_frame)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        y_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        row_widgets = {}
+        region_vars = {}
+        region_combos = []
+        color_widgets = {}
 
+        def get_region_color_info(region_num):
+            """Return (hex_color, color_name) for a region number."""
+            if region_num <= 0:
+                return '#D3D3D3', 'Excluded'
+            color_code = int(self.region_colors.get(region_num, ((region_num - 1) % 24) + 1))
+            if region_num not in self.region_colors:
+                self.region_colors[region_num] = color_code
+            hex_color = self.outlook_color_to_matplotlib(color_code)
+            color_name = OUTLOOK_COLORS.get(color_code, 'Red')
+            return hex_color, color_name
+
+        def parse_region_label(label):
+            if label == "Excluded":
+                return -1
+            if label.startswith("Region "):
+                try:
+                    return int(label.split(" ", 1)[1])
+                except (ValueError, IndexError):
+                    return None
+            return None
+
+        def update_row_color(location_id):
+            selected = region_vars[location_id].get().strip()
+            region_num = parse_region_label(selected)
+            if region_num is None:
+                return
+            hex_color, color_name = get_region_color_info(region_num)
+            swatch = color_widgets[location_id]['swatch']
+            color_label = color_widgets[location_id]['label']
+            swatch.configure(bg=hex_color)
+            color_label.configure(text=color_name)
+        
+        def refresh_region_dropdowns():
+            opts = region_options()
+            for combo in region_combos:
+                combo['values'] = opts
+        
+        def handle_region_pick(location_id, event=None):
+            picked = region_vars[location_id].get().strip()
+            if picked != "Create New Region...":
+                update_row_color(location_id)
+                return
+            
+            suggested = max(existing_regions) + 1 if existing_regions else max(1, int(self.n_clusters) + 1)
+            new_region = simpledialog.askinteger(
+                "Create New Region",
+                "Enter new region number (any positive integer):",
+                parent=dialog,
+                minvalue=1,
+                initialvalue=suggested
+            )
+            
+            if new_region is None:
+                current_region = int(self.clustered_results[self.clustered_results['location_id'] == location_id]['region'].iloc[0])
+                region_vars[location_id].set(to_region_label(current_region))
+                update_row_color(location_id)
+                return
+            
+            existing_regions.add(int(new_region))
+            if int(new_region) > int(self.n_clusters):
+                self.n_clusters = int(new_region)
+            if int(new_region) not in self.region_colors:
+                self.region_colors[int(new_region)] = ((int(new_region) - 1) % 24) + 1
+            refresh_region_dropdowns()
+            region_vars[location_id].set(f"Region {int(new_region)}")
+            update_row_color(location_id)
+            self.log(f"\n✨ Created new Region {int(new_region)}")
+        
+        # Build rows
         for _, row in editable_df.iterrows():
+            location_id = str(row['location_id'])
             postcode = str(row['postcode'])
-            instance = int(row['location_instance']) if 'location_instance' in row and not pd.isna(row['location_instance']) else 1
-            total = int(postcode_counts.get(postcode, 1))
-            base = postcode if total == 1 else f"{postcode} ({instance}/{total})"
-            if 'client_name' in row and pd.notna(row['client_name']) and str(row['client_name']).strip():
-                display = f"{base} - {str(row['client_name']).strip()}"
-            else:
-                display = base
-            selection_map[display] = row['location_id']
-            selection_values.append(display)
+            client_name = str(row['client_name']).strip() if 'client_name' in row and pd.notna(row['client_name']) else ""
+            region = int(row['region'])
+            
+            row_frame = ttk.Frame(rows_frame)
+            row_frame.pack(fill=tk.X, pady=1)
+            
+            ttk.Label(row_frame, text=postcode, width=16, anchor='w').pack(side=tk.LEFT, padx=(0, 6))
+            ttk.Label(row_frame, text=client_name, width=34, anchor='w').pack(side=tk.LEFT, padx=(0, 6))
+            
+            region_var = tk.StringVar(value=to_region_label(region))
+            region_vars[location_id] = region_var
+            region_combo = ttk.Combobox(
+                row_frame,
+                textvariable=region_var,
+                values=region_options(),
+                state='readonly',
+                width=20
+            )
+            region_combo.pack(side=tk.LEFT, padx=(0, 6))
+            region_combo.bind('<<ComboboxSelected>>', lambda e, lid=location_id: handle_region_pick(lid, e))
+            region_combos.append(region_combo)
+            
+            color_frame = ttk.Frame(row_frame)
+            color_frame.pack(side=tk.LEFT, padx=(0, 6))
 
-        selection_values = sorted(selection_values)
-        location_var = tk.StringVar()
-        postcode_combo = ttk.Combobox(postcode_frame, textvariable=location_var, 
-                                     values=selection_values, state='readonly', width=34)
-        postcode_combo.pack(side=tk.LEFT, padx=(0, 10))
+            swatch = tk.Label(color_frame, text="", width=3, height=1, relief=tk.SOLID, bd=1)
+            swatch.pack(side=tk.LEFT, padx=(0, 6), pady=1)
+            color_name_label = ttk.Label(color_frame, text="", width=12, anchor='w')
+            color_name_label.pack(side=tk.LEFT)
+
+            color_widgets[location_id] = {
+                'swatch': swatch,
+                'label': color_name_label,
+            }
+            update_row_color(location_id)
+            
+            row_widgets[location_id] = {
+                'postcode': postcode,
+                'client_name': client_name,
+            }
         
-        # Current region display
-        current_region_var = tk.StringVar(value="Select a postcode")
-        ttk.Label(postcode_frame, text="Current Region:", font=('Arial', 9)).pack(side=tk.LEFT, padx=(10, 5))
-        current_region_label = ttk.Label(postcode_frame, textvariable=current_region_var, 
-                                        font=('Arial', 9, 'bold'), foreground='blue')
-        current_region_label.pack(side=tk.LEFT)
+        # Buttons
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
         
-        def on_postcode_selected(event):
-            selected = location_var.get()
-            if selected and selected in selection_map:
-                location_id = selection_map[selected]
-                current_region = self.clustered_results[
+        def apply_changes():
+            changes = 0
+            for location_id, region_var in region_vars.items():
+                selected = region_var.get().strip()
+                if not selected:
+                    continue
+                
+                if selected == "Excluded":
+                    new_region = -1
+                elif selected.startswith("Region "):
+                    try:
+                        new_region = int(selected.split(" ", 1)[1])
+                    except (ValueError, IndexError):
+                        continue
+                else:
+                    continue
+                
+                old_region = int(self.clustered_results[
                     self.clustered_results['location_id'] == location_id
-                ]['region'].iloc[0]
-                if current_region == -1:
-                    current_region_var.set("Excluded")
-                else:
-                    current_region_var.set(f"Region {current_region}")
-        
-        postcode_combo.bind('<<ComboboxSelected>>', on_postcode_selected)
-        
-        # New region selection
-        region_frame = ttk.Frame(frame)
-        region_frame.pack(fill=tk.X, pady=20)
-        
-        ttk.Label(region_frame, text="New Region:", font=('Arial', 10)).pack(side=tk.LEFT, padx=(0, 10))
-        
-        # Region options: 1 to n_clusters, plus "Create New Region" and "Exclude"
-        region_options = [f"Region {i+1}" for i in range(self.n_clusters)] + [f"Create New Region {self.n_clusters + 1}"] + ["Exclude from all regions"]
-        new_region_var = tk.StringVar()
-        region_combo = ttk.Combobox(region_frame, textvariable=new_region_var, 
-                                   values=region_options, state='readonly', width=30)
-        region_combo.pack(side=tk.LEFT)
-        
-        # Apply button
-        def apply_edit():
-            selected_location = location_var.get()
-            new_region_str = new_region_var.get()
+                ]['region'].iloc[0])
+                
+                if old_region == new_region:
+                    continue
+                
+                self.clustered_results.loc[
+                    self.clustered_results['location_id'] == location_id, 'region'
+                ] = new_region
+                
+                if hasattr(self, 'customer_location_ids'):
+                    try:
+                        location_idx = [str(x) for x in self.customer_location_ids].index(str(location_id))
+                        self.labels[location_idx] = -1 if new_region == -1 else (new_region - 1)
+                    except ValueError:
+                        pass
+                
+                row_data = row_widgets.get(location_id, {})
+                location_display = row_data.get('postcode', '')
+                if row_data.get('client_name'):
+                    location_display = f"{location_display} - {row_data['client_name']}"
+                
+                old_display = "Excluded" if old_region == -1 else f"Region {old_region}"
+                new_display = "Excluded" if new_region == -1 else f"Region {new_region}"
+                self.log(f"\n✏️ Manual Edit: {location_display} moved from {old_display} to {new_display}")
+                changes += 1
             
-            if not selected_location:
-                messagebox.showwarning("No Location", "Please select a location.")
-                return
-
-            if selected_location not in selection_map:
-                messagebox.showwarning("Invalid Selection", "Selected location is not valid.")
-                return
-
-            selected_location_id = selection_map[selected_location]
-            
-            if not new_region_str:
-                messagebox.showwarning("No Region", "Please select a new region.")
-                return
-            
-            # Parse new region
-            if new_region_str == "Exclude from all regions":
-                new_region = -1
-                region_display = "Excluded"
-            elif new_region_str.startswith("Create New Region"):
-                # Create a new region
-                new_region = self.n_clusters + 1
-                region_display = f"Region {new_region}"
-                # Increment the cluster count
-                self.n_clusters += 1
-                self.log(f"\n✨ Created new {region_display}")
-            else:
-                new_region = int(new_region_str.split()[-1])
-                region_display = new_region_str
-            
-            # Get current region
-            current_region = self.clustered_results[
-                self.clustered_results['location_id'] == selected_location_id
-            ]['region'].iloc[0]
-            
-            if current_region == new_region:
-                messagebox.showinfo("No Change", f"{selected_location} is already in {region_display}.")
-                return
-            
-            # Update the region in clustered_results
-            self.clustered_results.loc[
-                self.clustered_results['location_id'] == selected_location_id, 'region'
-            ] = new_region
-            
-            # Update the labels array for visualization
-            if hasattr(self, 'customer_location_ids') and selected_location_id in self.customer_location_ids:
-                location_idx = self.customer_location_ids.index(selected_location_id)
-                if new_region == -1:
-                    self.labels[location_idx] = -1
-                else:
-                    self.labels[location_idx] = new_region - 1  # labels are 0-indexed
-            
-            # Update summary
             self.update_summary_results()
-            
-            # Log the change
-            old_display = "Excluded" if current_region == -1 else f"Region {current_region}"
-            self.log(f"\n✏️ Manual Edit: {selected_location} moved from {old_display} to {region_display}")
-            
-            # Refresh visualization
             self.refresh_visualization()
-            
-            messagebox.showinfo("Success", 
-                              f"{selected_location} has been moved to {region_display}.\n\n"
-                              f"The visualization has been updated.")
-            
-            # Update current region display
-            current_region_var.set(region_display)
-            
-            # Update the region dropdown to include any newly created regions
-            region_options = [f"Region {i+1}" for i in range(self.n_clusters)] + [f"Create New Region {self.n_clusters + 1}"] + ["Exclude from all regions"]
-            region_combo.config(values=region_options)
+            message = "No region changes were detected." if changes == 0 else f"Applied {changes} region change(s)."
+            messagebox.showinfo("Update Complete", message)
         
-        apply_frame = ttk.Frame(frame)
-        apply_frame.pack(pady=20)
+        ttk.Button(button_frame, text="Apply Changes & Refresh", command=apply_changes, width=25).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Close", command=dialog.destroy, width=15).pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(apply_frame, text="Apply Change", command=apply_edit, width=15).pack(side=tk.LEFT, padx=5)
-        ttk.Button(apply_frame, text="Close", command=dialog.destroy, width=15).pack(side=tk.LEFT, padx=5)
-        
-        # Info text
-        info_text = ttk.Label(frame, 
-                             text="Note: Changes are applied immediately to the visualization.\n"
-                                  "Use 'Run > Save Results to CSV' to save your edits.",
-                             font=('Arial', 8), foreground='gray', justify=tk.CENTER)
-        info_text.pack(pady=(20, 0))
+        ttk.Label(
+            main_frame,
+            text="Tip: use each row's dropdown for region selection. Choose 'Create New Region...' to add any number.",
+            font=('Arial', 8),
+            foreground='gray'
+        ).pack(anchor=tk.W, pady=(8, 0))
     
     def update_summary_results(self):
         """Update the summary results after manual edits"""

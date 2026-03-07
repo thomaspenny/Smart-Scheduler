@@ -7,6 +7,7 @@ import threading
 from itertools import combinations
 import os
 import sys
+import shutil
 
 # Import display preferences
 try:
@@ -30,6 +31,7 @@ class PostcodeDistanceApp:
         self.output_dir = None
         self.postcodes = []
         self.postcode_names = []  # List parallel to self.postcodes (preserves duplicate entries)
+        self.validation_failed = False
         
         # Initialize display preferences
         if DISPLAY_PREFS_AVAILABLE:
@@ -65,6 +67,10 @@ class PostcodeDistanceApp:
         self.generate_btn = ttk.Button(generate_frame, text="Generate CSV Files", 
                                        command=self.start_generation, state=tk.DISABLED)
         self.generate_btn.pack(side=tk.LEFT, padx=5)
+
+        self.reload_btn = ttk.Button(generate_frame, text="Reload Locations", 
+                         command=self.reload_locations_file)
+        self.reload_btn.pack(side=tk.LEFT, padx=5)
         
         ttk.Label(generate_frame, text="(This may take several minutes)", 
                  foreground="gray").pack(side=tk.LEFT)
@@ -96,6 +102,11 @@ class PostcodeDistanceApp:
         """Auto-load files from project directory"""
         if not self.project_dir or not os.path.exists(self.project_dir):
             return
+
+        # Reset loaded data before reloading
+        self.postcodes = []
+        self.postcode_names = []
+        self.validation_failed = False
         
         project_name = os.path.basename(self.project_dir)
         self.root.title(f"Postcode Distance Calculator - Project: {project_name}")
@@ -155,6 +166,33 @@ class PostcodeDistanceApp:
                 self.log(f"✗ Error loading postcodes: {e}")
         else:
             self.log(f"⚠ locations.csv not found in project directory")
+
+    def reload_locations_file(self):
+        """Require user to re-upload locations CSV, then load it into the project."""
+        if not self.project_dir:
+            messagebox.showwarning("No Project", "No project directory is set.")
+            return
+
+        selected_file = filedialog.askopenfilename(
+            title="Select Updated Locations CSV",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+
+        if not selected_file:
+            self.log("⚠ Re-upload cancelled. No new locations file was loaded.")
+            return
+
+        target_file = os.path.join(self.project_dir, "locations.csv")
+        try:
+            shutil.copy2(selected_file, target_file)
+            self.log(f"\n↻ Re-uploaded locations file: {selected_file}")
+            self.log(f"✓ Updated project file: {target_file}")
+        except Exception as e:
+            messagebox.showerror("Upload Error", f"Failed to re-upload locations file:\n{e}")
+            self.log(f"✗ Failed to re-upload locations file: {e}")
+            return
+
+        self.auto_load_project_files()
     
     def log(self, message):
         """Add message to log"""
@@ -195,6 +233,13 @@ class PostcodeDistanceApp:
         
     def start_generation(self):
         """Start the generation process in a separate thread"""
+        if not self.postcodes:
+            messagebox.showwarning(
+                "No Postcodes Loaded",
+                "No postcode data is loaded.\n\nPlease click 'Reload Locations' and re-upload locations.csv before generating files."
+            )
+            return
+
         self.generate_btn.config(state=tk.DISABLED)
         self.update_status("Processing...", "orange")
         
@@ -214,6 +259,7 @@ class PostcodeDistanceApp:
             self.log("\nSTEP 1: Geocoding postcodes...")
             postcode_coords = {}  # Unique postcode -> coords (for distance calculation)
             unique_postcodes_seen = set()
+            failed_postcodes = []
             total_postcodes = len(self.postcodes)
             
             for i, postcode in enumerate(self.postcodes, 1):
@@ -228,7 +274,37 @@ class PostcodeDistanceApp:
                             self.log(f"  Geocoded {i}/{total_postcodes} ({i*100//total_postcodes}%)")
                     else:
                         self.log(f"  ✗ Failed: {postcode}")
+                        failed_postcodes.append(postcode)
+                        unique_postcodes_seen.add(postcode)
                     time.sleep(0.1)
+
+            # Strict validation: stop immediately if any postcode failed geocoding
+            if failed_postcodes:
+                failed_unique = list(dict.fromkeys(failed_postcodes))
+                self.log("\n✗ VALIDATION FAILED")
+                self.log("The following postcode(s) could not be geocoded:")
+                for pc in failed_unique:
+                    self.log(f"  • {pc}")
+                self.log("\nProcess stopped. Update these postcodes in locations.csv and reload the file before running again.")
+
+                self.update_status("Validation failed - fix postcodes and reload file", "red")
+                self.progress_bar['value'] = 0
+                self.validation_failed = True
+
+                # Force user to reload corrected file before rerunning
+                self.postcodes = []
+                self.postcode_names = []
+
+                failed_text = "\n".join(failed_unique[:25])
+                extra = "" if len(failed_unique) <= 25 else f"\n...and {len(failed_unique) - 25} more"
+                messagebox.showerror(
+                    "Invalid Postcodes Found",
+                    "The process was stopped because some postcodes could not be found.\n\n"
+                    "Failed postcode(s):\n"
+                    f"{failed_text}{extra}\n\n"
+                    "Please correct these postcodes and click 'Reload Locations' to re-upload the updated file, then run again."
+                )
+                return
             
             self.log(f"✓ Successfully geocoded {len(postcode_coords)} unique postcodes")
             
@@ -320,6 +396,7 @@ class PostcodeDistanceApp:
             
             self.progress_bar['value'] = 100
             self.update_status("Complete!", "green")
+            self.validation_failed = False
             
             messagebox.showinfo("Success", 
                               f"CSV files generated successfully!\n\n"
@@ -333,7 +410,10 @@ class PostcodeDistanceApp:
             messagebox.showerror("Error", f"An error occurred:\n{e}")
         
         finally:
-            self.generate_btn.config(state=tk.NORMAL)
+            if self.input_file and self.output_dir and self.postcodes and not self.validation_failed:
+                self.generate_btn.config(state=tk.NORMAL)
+            else:
+                self.generate_btn.config(state=tk.DISABLED)
             
     def get_coordinates_from_postcode(self, postcode):
         """Get coordinates from postcode using postcodes.io API"""
