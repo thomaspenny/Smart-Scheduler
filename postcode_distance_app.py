@@ -278,16 +278,44 @@ class PostcodeDistanceApp:
                         unique_postcodes_seen.add(postcode)
                     time.sleep(0.1)
 
-            # Strict validation: stop immediately if any postcode failed geocoding
+            # Check for duplicate client names
+            duplicate_clients = []
+            if self.postcode_names:
+                # Filter out None values and create a list of actual client names
+                client_names_only = [name for name in self.postcode_names if name is not None]
+                # Find duplicates
+                seen = set()
+                for name in client_names_only:
+                    if name in seen:
+                        if name not in duplicate_clients:
+                            duplicate_clients.append(name)
+                    else:
+                        seen.add(name)
+            
+            # Strict validation: stop immediately if any postcode failed geocoding or duplicate client names found
+            validation_errors = []
+            
             if failed_postcodes:
                 failed_unique = list(dict.fromkeys(failed_postcodes))
+                validation_errors.append("postcodes")
                 self.log("\n✗ VALIDATION FAILED")
                 self.log("The following postcode(s) could not be geocoded:")
                 for pc in failed_unique:
                     self.log(f"  • {pc}")
-                self.log("\nProcess stopped. Update these postcodes in locations.csv and reload the file before running again.")
+            
+            if duplicate_clients:
+                validation_errors.append("client_names")
+                if not failed_postcodes:
+                    self.log("\n✗ VALIDATION FAILED")
+                self.log("\nThe following client name(s) are duplicated:")
+                for client in sorted(duplicate_clients):
+                    self.log(f"  • {client}")
+            
+            if validation_errors:
+                self.log("\nProcess stopped. Fix the issues in locations.csv and reload the file before running again.")
 
-                self.update_status("Validation failed - fix postcodes and reload file", "red")
+                error_types = " and ".join(validation_errors)
+                self.update_status(f"Validation failed - fix {error_types} and reload file", "red")
                 self.progress_bar['value'] = 0
                 self.validation_failed = True
 
@@ -295,14 +323,24 @@ class PostcodeDistanceApp:
                 self.postcodes = []
                 self.postcode_names = []
 
-                failed_text = "\n".join(failed_unique[:25])
-                extra = "" if len(failed_unique) <= 25 else f"\n...and {len(failed_unique) - 25} more"
+                # Build error message for popup
+                error_message = "The process was stopped due to validation errors:\n\n"
+                
+                if failed_postcodes:
+                    failed_text = "\n".join(failed_unique[:25])
+                    extra = "" if len(failed_unique) <= 25 else f"\n...and {len(failed_unique) - 25} more"
+                    error_message += f"Failed postcode(s):\n{failed_text}{extra}\n\n"
+                
+                if duplicate_clients:
+                    dup_text = "\n".join(sorted(duplicate_clients)[:25])
+                    extra = "" if len(duplicate_clients) <= 25 else f"\n...and {len(duplicate_clients) - 25} more"
+                    error_message += f"Duplicate client name(s):\n{dup_text}{extra}\n\n"
+                
+                error_message += "Please correct these issues and click 'Reload Locations' to re-upload the updated file, then run again."
+                
                 messagebox.showerror(
-                    "Invalid Postcodes Found",
-                    "The process was stopped because some postcodes could not be found.\n\n"
-                    "Failed postcode(s):\n"
-                    f"{failed_text}{extra}\n\n"
-                    "Please correct these postcodes and click 'Reload Locations' to re-upload the updated file, then run again."
+                    "Validation Errors Found",
+                    error_message
                 )
                 return
             
