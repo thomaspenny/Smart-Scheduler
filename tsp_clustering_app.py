@@ -5,12 +5,23 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
+from matplotlib.ticker import MultipleLocator
 from sklearn.cluster import AgglomerativeClustering
 from scipy.spatial import ConvexHull
 from shapely.geometry import Polygon, Point
 import threading
 import os
 import sys
+
+# Optional map background support
+try:
+    import cartopy.crs as ccrs  # type: ignore[import-not-found]
+    import cartopy.feature as cfeature  # type: ignore[import-not-found]
+    CARTOPY_AVAILABLE = True
+except Exception:
+    ccrs = None
+    cfeature = None
+    CARTOPY_AVAILABLE = False
 
 # Import display preferences
 try:
@@ -37,6 +48,222 @@ except Exception as e:
     def register_callback(func): pass
 
 # Outlook Category Colors Enumeration (OlCategoryColor)
+
+# UK Counties and their major towns/cities with coordinates (lat, lon)
+# Focused on Eastern England and surrounding regions
+UK_COUNTY_CITIES = {
+    'Cambridgeshire': {
+        'Cambridge': (52.2044, 0.1235),
+        'Peterborough': (52.5711, -0.2454),
+        'Ely': (52.3987, 0.2641),
+        'Huntingdon': (52.3317, -0.1811),
+        'St Neots': (52.2271, -0.2661),
+        'Wisbech': (52.6644, 0.1594),
+        'March': (52.5516, 0.0892),
+        'Chatteris': (52.4535, 0.0503),
+        'Soham': (52.3345, 0.3357),
+        'Whittlesey': (52.5589, -0.1317),
+    },
+    'Bedfordshire': {
+        'Bedford': (52.1377, -0.4688),
+        'Luton': (51.8787, -0.4200),
+        'Dunstable': (51.8861, -0.5209),
+        'Leighton Buzzard': (51.9166, -0.6617),
+        'Biggleswade': (52.0873, -0.2643),
+        'Sandy': (52.1301, -0.2919),
+        'Ampthill': (52.0292, -0.4919),
+        'Kempston': (52.1177, -0.5014),
+        'Flitwick': (51.9978, -0.4953),
+    },
+    'Hertfordshire': {
+        'St Albans': (51.7518, -0.3360),
+        'Watford': (51.6565, -0.3903),
+        'Stevenage': (51.9023, -0.2023),
+        'Hemel Hempstead': (51.7530, -0.4690),
+        'Welwyn Garden City': (51.8011, -0.2048),
+        'Hatfield': (51.7638, -0.2280),
+        'Bishop\'s Stortford': (51.8718, 0.1588),
+        'Letchworth': (51.9786, -0.2283),
+        'Hitchin': (51.9488, -0.2806),
+        'Borehamwood': (51.6573, -0.2714),
+        'Potters Bar': (51.6948, -0.1786),
+        'Hertford': (51.7958, -0.0787),
+        'Ware': (51.8110, -0.0290),
+    },
+    'Norfolk': {
+        'Norwich': (52.6289, 1.2974),
+        'King\'s Lynn': (52.7507, 0.3948),
+        'Great Yarmouth': (52.6085, 1.7297),
+        'Thetford': (52.4130, 0.7497),
+        'Dereham': (52.6813, 0.9378),
+        'Cromer': (52.9331, 1.3011),
+        'Diss': (52.3775, 1.1147),
+        'Fakenham': (52.8293, 0.8549),
+        'Wymondham': (52.5711, 1.1155),
+        'North Walsham': (52.8216, 1.3858),
+        'Attleborough': (52.5160, 1.0163),
+        'Swaffham': (52.6480, 0.6859),
+    },
+    'Suffolk': {
+        'Ipswich': (52.0595, 1.1557),
+        'Bury St Edmunds': (52.2467, 0.7135),
+        'Lowestoft': (52.4769, 1.7517),
+        'Felixstowe': (51.9640, 1.3517),
+        'Newmarket': (52.2452, 0.4076),
+        'Haverhill': (52.0806, 0.4405),
+        'Stowmarket': (52.1883, 0.9987),
+        'Sudbury': (52.0395, 0.7316),
+        'Mildenhall': (52.3445, 0.5109),
+        'Beccles': (52.4586, 1.5641),
+        'Woodbridge': (52.0935, 1.3188),
+    },
+    'Essex': {
+        'Chelmsford': (51.7356, 0.4685),
+        'Colchester': (51.8896, 0.9025),
+        'Basildon': (51.5760, 0.4887),
+        'Southend-on-Sea': (51.5459, 0.7077),
+        'Harlow': (51.7787, 0.1015),
+        'Braintree': (51.8782, 0.5522),
+        'Clacton-on-Sea': (51.7909, 1.1489),
+        'Brentwood': (51.6217, 0.3050),
+        'Saffron Walden': (52.0247, 0.2429),
+        'Witham': (51.8008, 0.6398),
+        'Maldon': (51.7316, 0.6766),
+        'Halstead': (51.9454, 0.6380),
+        'Epping': (51.6987, 0.1108),
+    },
+    'Lincolnshire': {
+        'Lincoln': (53.2283, -0.5388),
+        'Boston': (52.9789, -0.0262),
+        'Grantham': (52.9113, -0.6417),
+        'Spalding': (52.7850, -0.1520),
+        'Stamford': (52.6536, -0.4817),
+        'Sleaford': (52.9976, -0.4088),
+        'Skegness': (53.1452, 0.3368),
+        'Louth': (53.3669, -0.0062),
+        'Bourne': (52.7678, -0.3776),
+        'Market Deeping': (52.6762, -0.3128),
+        'Gainsborough': (53.3977, -0.7732),
+    },
+    'Northamptonshire': {
+        'Northampton': (52.2405, -0.9027),
+        'Kettering': (52.3984, -0.7268),
+        'Corby': (52.4886, -0.6933),
+        'Wellingborough': (52.3027, -0.6937),
+        'Rushden': (52.2893, -0.6013),
+        'Daventry': (52.2572, -1.1619),
+        'Brackley': (52.0335, -1.1471),
+        'Towcester': (52.1331, -0.9911),
+        'Raunds': (52.3441, -0.5382),
+        'Desborough': (52.4396, -0.8181),
+    },
+    'Leicestershire': {
+        'Leicester': (52.6369, -1.1398),
+        'Loughborough': (52.7714, -1.2047),
+        'Hinckley': (52.5406, -1.3735),
+        'Coalville': (52.7238, -1.3686),
+        'Market Harborough': (52.4782, -0.9218),
+        'Melton Mowbray': (52.7662, -0.8856),
+        'Lutterworth': (52.4558, -1.2030),
+        'Wigston': (52.5814, -1.0938),
+        'Oadby': (52.6021, -1.0810),
+        'Ashby-de-la-Zouch': (52.7468, -1.4707),
+    },
+    'Rutland': {
+        'Oakham': (52.6713, -0.7330),
+        'Uppingham': (52.5880, -0.7206),
+    },
+    'Buckinghamshire': {
+        'Milton Keynes': (52.0406, -0.7594),
+        'Aylesbury': (51.8165, -0.8139),
+        'High Wycombe': (51.6287, -0.7482),
+        'Buckingham': (52.0002, -0.9870),
+        'Chesham': (51.7054, -0.6110),
+        'Amersham': (51.6745, -0.6070),
+        'Marlow': (51.5719, -0.7769),
+        'Beaconsfield': (51.6108, -0.6426),
+        'Princes Risborough': (51.7199, -0.8337),
+        'Wendover': (51.7629, -0.7398),
+    },
+    'Oxfordshire': {
+        'Oxford': (51.7520, -1.2577),
+        'Banbury': (52.0616, -1.3390),
+        'Abingdon': (51.6714, -1.2860),
+        'Bicester': (51.8999, -1.1500),
+        'Witney': (51.7836, -1.4854),
+        'Didcot': (51.6089, -1.2425),
+        'Thame': (51.7489, -0.9758),
+        'Henley-on-Thames': (51.5364, -0.9031),
+        'Wallingford': (51.5985, -1.1253),
+    },
+    'Warwickshire': {
+        'Warwick': (52.2819, -1.5849),
+        'Leamington Spa': (52.2919, -1.5368),
+        'Rugby': (52.3708, -1.2653),
+        'Nuneaton': (52.5230, -1.4681),
+        'Stratford-upon-Avon': (52.1917, -1.7081),
+        'Kenilworth': (52.3480, -1.5667),
+        'Bedworth': (52.4793, -1.4692),
+        'Atherstone': (52.5771, -1.5453),
+    },
+    'Nottinghamshire': {
+        'Nottingham': (52.9548, -1.1581),
+        'Mansfield': (53.1472, -1.1983),
+        'Newark-on-Trent': (53.0770, -0.8080),
+        'Worksop': (53.3030, -1.1238),
+        'Retford': (53.3227, -0.9407),
+        'Sutton-in-Ashfield': (53.1256, -1.2608),
+        'Beeston': (52.9240, -1.2169),
+        'West Bridgford': (52.9326, -1.1263),
+    },
+    'Derbyshire': {
+        'Derby': (52.9219, -1.4746),
+        'Chesterfield': (53.2350, -1.4211),
+        'Ilkeston': (52.9708, -1.3101),
+        'Swadlincote': (52.7739, -1.5566),
+        'Buxton': (53.2587, -1.9111),
+        'Matlock': (53.1396, -1.5573),
+        'Glossop': (53.4438, -1.9488),
+        'Heanor': (53.0149, -1.3535),
+    },
+    'London': {
+        'Central London': (51.5074, -0.1278),
+        'Westminster': (51.4975, -0.1357),
+        'City of London': (51.5155, -0.0922),
+        'Camden': (51.5290, -0.1255),
+        'Islington': (51.5465, -0.1058),
+        'Hackney': (51.5450, -0.0553),
+        'Tower Hamlets': (51.5099, -0.0059),
+        'Greenwich': (51.4826, 0.0077),
+        'Lewisham': (51.4452, -0.0209),
+        'Southwark': (51.5035, -0.0804),
+        'Lambeth': (51.4607, -0.1163),
+        'Wandsworth': (51.4571, -0.1818),
+    },
+    'Kent': {
+        'Maidstone': (51.2704, 0.5227),
+        'Canterbury': (51.2802, 1.0789),
+        'Ashford': (51.1465, 0.8750),
+        'Dartford': (51.4463, 0.2189),
+        'Gravesend': (51.4413, 0.3705),
+        'Tonbridge': (51.1987, 0.2750),
+        'Sevenoaks': (51.2720, 0.1868),
+        'Folkestone': (51.0814, 1.1699),
+        'Dover': (51.1279, 1.3134),
+        'Margate': (51.3813, 1.3862),
+    },
+    'Surrey': {
+        'Guildford': (51.2362, -0.5704),
+        'Woking': (51.3168, -0.5585),
+        'Redhill': (51.2406, -0.1703),
+        'Epsom': (51.3355, -0.2699),
+        'Staines': (51.4329, -0.5091),
+        'Farnham': (51.2147, -0.7998),
+        'Camberley': (51.3375, -0.7427),
+        'Leatherhead': (51.2979, -0.3303),
+    },
+}
+
 # All 25 available colors in Outlook
 OUTLOOK_COLORS = {
     0: "None",
@@ -86,6 +313,15 @@ class TSPClusteringApp:
         self.canvas = None
         self.toolbar = None
         self.log_window = None
+
+        # Visualization preferences/state
+        self.show_map_background = False
+        self.show_points = True
+        self.selected_counties = {'Cambridgeshire', 'Bedfordshire', 'Hertfordshire'}  # Default selection
+        self.initial_coords = None
+        self.initial_depot = None
+        self.initial_postcodes = None
+        self.initial_depot_postcode = None
         
         # Store clustering results for saving
         self.clustered_results = None
@@ -147,6 +383,21 @@ class TSPClusteringApp:
         self.toggle_btn = ttk.Button(button_bar, text="Show Postcodes", 
                                     command=self.toggle_display_preference, width=18)
         self.toggle_btn.pack(side=tk.RIGHT, padx=(10, 0))
+
+        self.map_toggle_btn = ttk.Button(button_bar, text="Map: Off",
+                         command=self.toggle_map_background, width=12)
+        self.map_toggle_btn.pack(side=tk.RIGHT, padx=(4, 0))
+        self.update_map_toggle_button_text()
+        
+        self.counties_btn = ttk.Button(button_bar, text=f"Counties... ({len(self.selected_counties)})",
+                 command=self.show_county_selector, width=16)
+        self.counties_btn.pack(side=tk.RIGHT, padx=(4, 0))
+
+        self.points_toggle_btn = ttk.Button(button_bar, text="Points: On",
+                         command=self.toggle_points_visibility, width=12)
+        self.points_toggle_btn.pack(side=tk.RIGHT, padx=(4, 0))
+        self.update_points_toggle_button_text()
+
         self.update_toggle_button_text()
         self.rename_color_btn.pack(side=tk.LEFT, padx=2)
         self.view_btn = ttk.Button(button_bar, text="Analytics", command=self.show_log_window, width=12)
@@ -273,6 +524,147 @@ class TSPClusteringApp:
                 )
             except Exception as e:
                 print(f"Error redrawing visualization: {e}")
+
+    def toggle_map_background(self):
+        """Toggle map background layer behind the plot."""
+        if not CARTOPY_AVAILABLE and not self.show_map_background:
+            messagebox.showwarning(
+                "Map Background Unavailable",
+                "Cartopy is not installed in this environment.\n\n"
+                "Install it to enable map backgrounds."
+            )
+            return
+
+        self.show_map_background = not self.show_map_background
+        self.update_map_toggle_button_text()
+        self._redraw_current_visualization()
+
+    def toggle_points_visibility(self):
+        """Toggle visibility of cluster points and labels."""
+        self.show_points = not self.show_points
+        self.update_points_toggle_button_text()
+        self._redraw_current_visualization()
+
+    def update_map_toggle_button_text(self):
+        """Update map toggle button text based on current state."""
+        if hasattr(self, 'map_toggle_btn'):
+            self.map_toggle_btn.config(text="Map: On" if self.show_map_background else "Map: Off")
+
+    def update_points_toggle_button_text(self):
+        """Update points toggle button text based on current state."""
+        if hasattr(self, 'points_toggle_btn'):
+            self.points_toggle_btn.config(text="Points: On" if self.show_points else "Points: Off")
+
+    def _redraw_current_visualization(self):
+        """Redraw whichever visualization is currently active."""
+        try:
+            if self.has_results and hasattr(self, 'coords') and hasattr(self, 'labels'):
+                customer_names = getattr(self, 'customer_names', [None] * len(self.customer_postcodes))
+                self.create_visualization(
+                    self.coords,
+                    self.labels,
+                    self.depot,
+                    self.n_clusters,
+                    self.customer_postcodes,
+                    customer_names,
+                    self.depot_postcode
+                )
+            elif self.initial_coords is not None and self.initial_depot is not None and self.initial_postcodes is not None:
+                self.create_initial_visualization(
+                    self.initial_coords,
+                    self.initial_depot,
+                    self.initial_postcodes,
+                    self.initial_depot_postcode if self.initial_depot_postcode else "TBD"
+                )
+        except Exception as e:
+            print(f"Error redrawing visualization: {e}")
+
+    def _create_plot_axis(self, fig):
+        """Create matplotlib axis, optionally using Cartopy projection."""
+        if self.show_map_background and CARTOPY_AVAILABLE:
+            return fig.add_subplot(111, projection=ccrs.PlateCarree())
+        return fig.add_subplot(111)
+
+    def _draw_map_background(self, ax):
+        """Draw base map features behind plotted points."""
+        if not (self.show_map_background and CARTOPY_AVAILABLE):
+            return
+
+        try:
+            # Base geographic features
+            land = cfeature.NaturalEarthFeature(
+                'physical', 'land', '10m',
+                facecolor='#f3efe2', edgecolor='none'
+            )
+            ocean = cfeature.NaturalEarthFeature(
+                'physical', 'ocean', '10m',
+                facecolor='#dfefff', edgecolor='none'
+            )
+            lakes = cfeature.NaturalEarthFeature(
+                'physical', 'lakes', '10m',
+                facecolor='#d9ecff', edgecolor='none'
+            )
+
+            ax.add_feature(ocean, zorder=0)
+            ax.add_feature(land, zorder=0)
+            ax.add_feature(lakes, zorder=0.1)
+            ax.add_feature(cfeature.COASTLINE.with_scale('10m'), linewidth=0.5, edgecolor='#666666', zorder=0.5)
+            ax.add_feature(cfeature.BORDERS.with_scale('10m'), linewidth=0.4, edgecolor='#888888', alpha=0.8, zorder=0.5)
+            ax.add_feature(cfeature.RIVERS.with_scale('10m'), linewidth=0.3, edgecolor='#6aa5d7', alpha=0.5, zorder=0.4)
+            
+            # Major roads (highways) for route context
+            try:
+                roads = cfeature.NaturalEarthFeature(
+                    'cultural', 'roads', '10m',
+                    edgecolor='#d4a574', facecolor='none'
+                )
+                ax.add_feature(roads, linewidth=0.6, alpha=0.4, zorder=0.3)
+            except Exception:
+                # Roads may not be available in all Cartopy versions, skip silently
+                pass
+            
+            # Cities and populated places for geographic context
+            # Plot cities from user-selected counties
+            try:
+                # Get current map extent for filtering
+                try:
+                    extent = ax.get_extent(crs=ccrs.PlateCarree())
+                    west, east, south, north = extent
+                except:
+                    # Fallback: use very wide extent to show all
+                    west, east = -10, 5
+                    south, north = 49, 60
+                
+                # Plot cities from selected counties
+                cities_plotted = 0
+                for county in self.selected_counties:
+                    if county in UK_COUNTY_CITIES:
+                        for city_name, (lat, lon) in UK_COUNTY_CITIES[county].items():
+                            # Only plot if within reasonable distance of current extent
+                            # (Add some margin to include cities near the edge)
+                            margin = 0.5  # degrees
+                            if (west - margin) <= lon <= (east + margin) and (south - margin) <= lat <= (north + margin):
+                                # Plot city marker
+                                ax.plot(lon, lat, 'o', color='#d4520f', markersize=5, 
+                                       transform=ccrs.PlateCarree(), zorder=0.65, markeredgewidth=0.5,
+                                       markeredgecolor='#8b3a0f')
+                                
+                                # Add city label (offset slightly to avoid overlap with marker)
+                                ax.text(lon + 0.0167, lat + 0.0167, city_name, fontsize=8, 
+                                       color='#2c2c2c', alpha=0.85, weight='bold',
+                                       transform=ccrs.PlateCarree(), zorder=0.67,
+                                       bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
+                                                alpha=0.7, edgecolor='none'))
+                                cities_plotted += 1
+                
+                if cities_plotted > 0:
+                    print(f"Plotted {cities_plotted} cities from {len(self.selected_counties)} selected counties")
+            except Exception as e:
+                print(f"Note: Could not add city markers: {e}")
+                
+        except Exception as e:
+            # Keep plotting functional even if Cartopy data download fails
+            print(f"Warning: Could not render map background: {e}")
     
     def auto_load_project_files(self):
         """Auto-load files from project directory"""
@@ -368,6 +760,107 @@ class TSPClusteringApp:
               width=14).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Cancel", command=dialog.destroy, 
               width=10).pack(side=tk.LEFT, padx=5)
+    def show_county_selector(self):
+        """Show dialog to select which UK counties to display cities for"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Select Counties to Display")
+        dialog.geometry("500x550")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        # Main container
+        main_frame = ttk.Frame(dialog, padding="15")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Instructions
+        ttk.Label(main_frame, text="Select which counties to show towns/cities for on the map:",
+                 font=('Arial', 10, 'bold')).pack(pady=(0, 10))
+
+        # Create scrollable frame for checkboxes
+        canvas_frame = ttk.Frame(main_frame)
+        canvas_frame.pack(fill=tk.BOTH, expand=True)
+
+        canvas = tk.Canvas(canvas_frame, height=350)
+        scrollbar = ttk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Dictionary to store checkbox variables
+        checkbox_vars = {}
+
+        # Create checkbox for each county (sorted alphabetically)
+        sorted_counties = sorted(UK_COUNTY_CITIES.keys())
+        for county in sorted_counties:
+            var = tk.BooleanVar(value=(county in self.selected_counties))
+            checkbox_vars[county] = var
+
+            cb = ttk.Checkbutton(scrollable_frame, text=f"{county} ({len(UK_COUNTY_CITIES[county])} cities)",
+                               variable=var)
+            cb.pack(anchor=tk.W, padx=10, pady=2)
+
+        # Quick select buttons
+        quick_select_frame = ttk.Frame(main_frame)
+        quick_select_frame.pack(pady=10, fill=tk.X)
+
+        def select_all():
+            for var in checkbox_vars.values():
+                var.set(True)
+
+        def select_none():
+            for var in checkbox_vars.values():
+                var.set(False)
+
+        def select_east_england():
+            """Select East of England counties"""
+            east_counties = {'Cambridgeshire', 'Norfolk', 'Suffolk', 'Essex',
+                           'Bedfordshire', 'Hertfordshire'}
+            for county, var in checkbox_vars.items():
+                var.set(county in east_counties)
+
+        ttk.Button(quick_select_frame, text="Select All", command=select_all,
+                  width=12).pack(side=tk.LEFT, padx=5)
+        ttk.Button(quick_select_frame, text="Select None", command=select_none,
+                  width=12).pack(side=tk.LEFT, padx=5)
+        ttk.Button(quick_select_frame, text="East England", command=select_east_england,
+                  width=12).pack(side=tk.LEFT, padx=5)
+
+        # Apply/Cancel buttons
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(pady=(10, 0))
+
+        def apply_and_close():
+            # Update selected counties
+            self.selected_counties = {county for county, var in checkbox_vars.items() if var.get()}
+
+            # Count total cities
+            total_cities = sum(len(UK_COUNTY_CITIES[county]) for county in self.selected_counties)
+
+            # Update counties button text to show count
+            self.counties_btn.config(text=f"Counties... ({len(self.selected_counties)})")
+
+            dialog.destroy()
+
+            # Refresh visualization if map is showing
+            if self.show_map_background and hasattr(self, 'fig') and self.fig is not None:
+                self.refresh_visualization()
+
+            self.log(f"✓ County selection updated: {len(self.selected_counties)} counties, {total_cities} cities")
+
+        ttk.Button(btn_frame, text="Apply", command=apply_and_close,
+                  width=10).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy,
+                  width=10).pack(side=tk.LEFT, padx=5)
+    
     
     def show_log_window(self):
         """Show log window"""
@@ -638,6 +1131,12 @@ class TSPClusteringApp:
             # Get all locations
             coords = locations_df[['latitude', 'longitude']].values
             postcodes = locations_df['postcode'].tolist()
+
+            # Store latest initial visualization data for redraw/toggle actions
+            self.initial_coords = coords
+            self.initial_depot = depot
+            self.initial_postcodes = postcodes
+            self.initial_depot_postcode = depot_postcode if depot_postcode else "TBD"
             
             # Create initial visualization (no clustering yet)
             self.create_initial_visualization(coords, depot, postcodes, depot_postcode if depot_postcode else "TBD")
@@ -874,10 +1373,34 @@ class TSPClusteringApp:
             # Map customer postcode to driving-matrix index (duplicates intentionally share index)
             customer_postcode_to_idx = {pc: postcode_to_idx[pc] for pc in set(customer_postcodes) if pc in postcode_to_idx}
             
+            # Create customer-only distance matrix (excluding depot)
+            # Map each customer index to their position in the full driving_time_matrix
+            n_customers = len(customer_postcodes)
+            customer_distance_matrix = np.full((n_customers, n_customers), np.inf)
+            np.fill_diagonal(customer_distance_matrix, 0)
+            
+            for i in range(n_customers):
+                pc_i = customer_postcodes[i]
+                if pc_i not in postcode_to_idx:
+                    continue
+                idx_i = postcode_to_idx[pc_i]
+                
+                for j in range(n_customers):
+                    if i == j:
+                        continue
+                    pc_j = customer_postcodes[j]
+                    if pc_j not in postcode_to_idx:
+                        continue
+                    idx_j = postcode_to_idx[pc_j]
+                    
+                    customer_distance_matrix[i, j] = driving_time_matrix[idx_i, idx_j]
+            
+            self.log(f"✓ Built {n_customers}x{n_customers} customer distance matrix")
+            
             # Run clustering
             self.log("\nPerforming clustering optimization...")
             labels, cluster_metrics = self.balance_clusters(
-                coords, depot, driving_time_matrix, actual_regions
+                coords, depot, customer_distance_matrix, actual_regions
             )
             
             self.log(f"✓ Clustering complete")
@@ -1739,6 +2262,46 @@ class TSPClusteringApp:
         
         # Clear the stored labels
         self._region_labels_to_draw = []
+
+    def _configure_equal_geo_axes(self, ax, coords, depot=None, tick_step=0.2):
+        """Keep longitude/latitude on identical scales with fixed major ticks."""
+        if coords is None or len(coords) == 0:
+            return
+
+        # Build plotting extent from all displayed geo points
+        lats = coords[:, 0].astype(float)
+        lons = coords[:, 1].astype(float)
+
+        if depot is not None and len(depot) > 0:
+            lats = np.append(lats, float(depot[0, 0]))
+            lons = np.append(lons, float(depot[0, 1]))
+
+        min_lon, max_lon = np.min(lons), np.max(lons)
+        min_lat, max_lat = np.min(lats), np.max(lats)
+
+        x_span = max_lon - min_lon
+        y_span = max_lat - min_lat
+
+        # Add small independent padding per-axis (prevents clipping without wasting vertical space)
+        # Keep a minimum padding so single-point/near-single-point views are still usable.
+        x_pad = max(x_span * 0.05, tick_step * 0.25)
+        y_pad = max(y_span * 0.05, tick_step * 0.25)
+
+        x_min, x_max = min_lon - x_pad, max_lon + x_pad
+        y_min, y_max = min_lat - y_pad, max_lat + y_pad
+
+        if self.show_map_background and CARTOPY_AVAILABLE and hasattr(ax, 'set_extent'):
+            ax.set_extent([x_min, x_max, y_min, y_max], crs=ccrs.PlateCarree())
+        else:
+            ax.set_xlim(x_min, x_max)
+            ax.set_ylim(y_min, y_max)
+
+        # Ensure axis units are identical even when window is resized
+        ax.set_aspect('equal', adjustable='box')
+
+        # Fixed major tick intervals on both axes
+        ax.xaxis.set_major_locator(MultipleLocator(tick_step))
+        ax.yaxis.set_major_locator(MultipleLocator(tick_step))
             
     def create_visualization(self, coords, labels, depot, n_clusters, customer_postcodes, customer_names, depot_postcode):
         """Create visualization of clusters with postcode labels embedded in GUI"""
@@ -1759,7 +2322,8 @@ class TSPClusteringApp:
         
         # Create figure (constrained layout prevents axis labels from being clipped)
         fig = Figure(figsize=(12, 8), dpi=100, constrained_layout=True)
-        ax = fig.add_subplot(111)
+        ax = self._create_plot_axis(fig)
+        self._draw_map_background(ax)
         
         # Build color list from region colors (use Outlook colors if available)
         colors = []
@@ -1769,133 +2333,137 @@ class TSPClusteringApp:
             matplotlib_color = self.outlook_color_to_matplotlib(color_code)
             colors.append(matplotlib_color)
         
-        # Plot clusters
-        for i in range(n_clusters):
-            cluster_mask = labels == i
-            cluster_coords = coords[cluster_mask]
+        # Only show points if toggled on
+        if self.show_points:
+            # Plot clusters
+            for i in range(n_clusters):
+                cluster_mask = labels == i
+                cluster_coords = coords[cluster_mask]
+                
+                if len(cluster_coords) > 0:
+                    # Get custom name if available
+                    region_name = self.get_region_display_name(i + 1)
+                    
+                    ax.scatter(cluster_coords[:, 1], cluster_coords[:, 0], 
+                              c=colors[i], s=100, alpha=0.6, 
+                              edgecolors='black', linewidth=1,
+                              label=f'{region_name} ({np.sum(cluster_mask)} locations)')
+                    
+                    # Draw convex hull if possible
+                    if len(cluster_coords) >= 3:
+                        try:
+                            hull = ConvexHull(cluster_coords)
+                            for simplex in hull.simplices:
+                                ax.plot(cluster_coords[simplex, 1], cluster_coords[simplex, 0], 
+                                       colors[i], linewidth=2, alpha=0.5)
+                        except:
+                            pass
+                    
+                    # Add region name label at centroid (store for overlap prevention)
+                    centroid_lon = cluster_coords[:, 1].mean()
+                    centroid_lat = cluster_coords[:, 0].mean()
+                    
+                    # Store region label info for later (after all customer labels)
+                    self._region_labels_to_draw.append({
+                        'text': region_name,
+                        'lon': centroid_lon,
+                        'lat': centroid_lat,
+                        'color': colors[i]
+                    })
             
-            if len(cluster_coords) > 0:
-                # Get custom name if available
-                region_name = self.get_region_display_name(i + 1)
-                
-                ax.scatter(cluster_coords[:, 1], cluster_coords[:, 0], 
-                          c=colors[i], s=100, alpha=0.6, 
-                          edgecolors='black', linewidth=1,
-                          label=f'{region_name} ({np.sum(cluster_mask)} locations)')
-                
-                # Draw convex hull if possible
-                if len(cluster_coords) >= 3:
-                    try:
-                        hull = ConvexHull(cluster_coords)
-                        for simplex in hull.simplices:
-                            ax.plot(cluster_coords[simplex, 1], cluster_coords[simplex, 0], 
-                                   colors[i], linewidth=2, alpha=0.5)
-                    except:
-                        pass
-                
-                # Add region name label at centroid (store for overlap prevention)
-                centroid_lon = cluster_coords[:, 1].mean()
-                centroid_lat = cluster_coords[:, 0].mean()
-                
-                # Store region label info for later (after all customer labels)
-                self._region_labels_to_draw.append({
-                    'text': region_name,
-                    'lon': centroid_lon,
-                    'lat': centroid_lat,
-                    'color': colors[i]
-                })
-        
-        # Plot excluded locations (region = -1)
-        excluded_mask = labels == -1
-        excluded_coords = coords[excluded_mask]
-        if len(excluded_coords) > 0:
-            ax.scatter(excluded_coords[:, 1], excluded_coords[:, 0], 
-                      c='lightgray', s=150, alpha=0.6, 
-                      edgecolors='red', linewidth=2,
-                      marker='D',
-                      label=f'Excluded ({np.sum(excluded_mask)} locations)')
-        
-        # Add postcode labels for customer locations
-        postcode_total_counts = {}
-        postcode_seen_counts = {}
-        for pc in customer_postcodes:
-            postcode_total_counts[pc] = postcode_total_counts.get(pc, 0) + 1
-
-        # For points with identical coordinates, spread label offsets radially
-        coord_keys = [(round(float(c[0]), 6), round(float(c[1]), 6)) for c in coords]
-        coord_total_counts = {}
-        coord_seen_counts = {}
-        for key in coord_keys:
-            coord_total_counts[key] = coord_total_counts.get(key, 0) + 1
-
-        show_names = get_show_names()
-        for idx, (coord, postcode) in enumerate(zip(coords, customer_postcodes)):
-            postcode_seen_counts[postcode] = postcode_seen_counts.get(postcode, 0) + 1
-            postcode_instance = postcode_seen_counts[postcode]
-            postcode_total = postcode_total_counts[postcode]
-            postcode_display = postcode if postcode_total == 1 else f"{postcode} ({postcode_instance}/{postcode_total})"
-
-            # Determine what to display
-            customer_name = customer_names[idx] if idx < len(customer_names) else None
-            if show_names and customer_name:
-                display_text = customer_name if postcode_total == 1 else f"{customer_name} [{postcode_display}]"
-            else:
-                display_text = postcode_display
-
-            # Dynamic annotation offset for exact coordinate duplicates
-            key = coord_keys[idx]
-            coord_seen_counts[key] = coord_seen_counts.get(key, 0) + 1
-            coord_instance = coord_seen_counts[key]
-            coord_total = coord_total_counts[key]
-            if coord_total > 1:
-                angle = 2 * np.pi * (coord_instance - 1) / coord_total
-                radius = 8
-                offset_x = int(round(radius * np.cos(angle)))
-                offset_y = int(round(radius * np.sin(angle)))
-            else:
-                offset_x, offset_y = 3, 3
+            # Plot excluded locations (region = -1)
+            excluded_mask = labels == -1
+            excluded_coords = coords[excluded_mask]
+            if len(excluded_coords) > 0:
+                ax.scatter(excluded_coords[:, 1], excluded_coords[:, 0], 
+                          c='lightgray', s=150, alpha=0.6, 
+                          edgecolors='red', linewidth=2,
+                          marker='D',
+                          label=f'Excluded ({np.sum(excluded_mask)} locations)')
             
-            # Different styling for excluded postcodes
-            if labels[idx] == -1:
-                bbox_style = dict(boxstyle='round,pad=0.3', facecolor='lightgray', 
-                                edgecolor='red', alpha=0.7, linestyle='--', linewidth=1.5)
-            else:
-                bbox_style = dict(boxstyle='round,pad=0.3', facecolor='white', 
-                                edgecolor='gray', alpha=0.7)
+            # Add postcode labels for customer locations
+            postcode_total_counts = {}
+            postcode_seen_counts = {}
+            for pc in customer_postcodes:
+                postcode_total_counts[pc] = postcode_total_counts.get(pc, 0) + 1
+
+            # For points with identical coordinates, spread label offsets radially
+            coord_keys = [(round(float(c[0]), 6), round(float(c[1]), 6)) for c in coords]
+            coord_total_counts = {}
+            coord_seen_counts = {}
+            for key in coord_keys:
+                coord_total_counts[key] = coord_total_counts.get(key, 0) + 1
+
+            show_names = get_show_names()
+            for idx, (coord, postcode) in enumerate(zip(coords, customer_postcodes)):
+                postcode_seen_counts[postcode] = postcode_seen_counts.get(postcode, 0) + 1
+                postcode_instance = postcode_seen_counts[postcode]
+                postcode_total = postcode_total_counts[postcode]
+                postcode_display = postcode if postcode_total == 1 else f"{postcode} ({postcode_instance}/{postcode_total})"
+
+                # Determine what to display
+                customer_name = customer_names[idx] if idx < len(customer_names) else None
+                if show_names and customer_name:
+                    display_text = customer_name if postcode_total == 1 else f"{customer_name} [{postcode_display}]"
+                else:
+                    display_text = postcode_display
+
+                # Dynamic annotation offset for exact coordinate duplicates
+                key = coord_keys[idx]
+                coord_seen_counts[key] = coord_seen_counts.get(key, 0) + 1
+                coord_instance = coord_seen_counts[key]
+                coord_total = coord_total_counts[key]
+                if coord_total > 1:
+                    angle = 2 * np.pi * (coord_instance - 1) / coord_total
+                    radius = 8
+                    offset_x = int(round(radius * np.cos(angle)))
+                    offset_y = int(round(radius * np.sin(angle)))
+                else:
+                    offset_x, offset_y = 3, 3
+                
+                # Different styling for excluded postcodes
+                if labels[idx] == -1:
+                    bbox_style = dict(boxstyle='round,pad=0.3', facecolor='lightgray', 
+                                    edgecolor='red', alpha=0.7, linestyle='--', linewidth=1.5)
+                else:
+                    bbox_style = dict(boxstyle='round,pad=0.3', facecolor='white', 
+                                    edgecolor='gray', alpha=0.7)
+                
+                ax.annotate(display_text, 
+                           xy=(coord[1], coord[0]),
+                           xytext=(offset_x, offset_y),
+                           textcoords='offset points',
+                           fontsize=7,
+                           fontweight='bold',
+                           bbox=bbox_style,
+                           zorder=10)
             
-            ax.annotate(display_text, 
-                       xy=(coord[1], coord[0]),
-                       xytext=(offset_x, offset_y),
+            # Plot depot
+            ax.scatter(depot[0, 1], depot[0, 0], c='gold', s=500, marker='*', 
+                      edgecolors='black', linewidth=2, label='Home Base (Depot)', zorder=5)
+            
+            # Add depot label
+            ax.annotate(depot_postcode, 
+                       xy=(depot[0, 1], depot[0, 0]),
+                       xytext=(5, 5),  # Offset by 5 points
                        textcoords='offset points',
-                       fontsize=7,
+                       fontsize=9,
                        fontweight='bold',
-                       bbox=bbox_style,
-                       zorder=10)
-        
-        # Plot depot
-        ax.scatter(depot[0, 1], depot[0, 0], c='gold', s=500, marker='*', 
-                  edgecolors='black', linewidth=2, label='Home Base (Depot)', zorder=5)
-        
-        # Add depot label
-        ax.annotate(depot_postcode, 
-                   xy=(depot[0, 1], depot[0, 0]),
-                   xytext=(5, 5),  # Offset by 5 points
-                   textcoords='offset points',
-                   fontsize=9,
-                   fontweight='bold',
-                   color='darkgoldenrod',
-                   bbox=dict(boxstyle='round,pad=0.4', facecolor='yellow', 
-                            edgecolor='black', alpha=0.8, linewidth=2),
-                   zorder=15)
-        
-        # Now add region labels with overlap prevention
-        self._add_region_labels_with_overlap_prevention(ax, coords, customer_postcodes, depot)
+                       color='darkgoldenrod',
+                       bbox=dict(boxstyle='round,pad=0.4', facecolor='yellow', 
+                                edgecolor='black', alpha=0.8, linewidth=2),
+                       zorder=15)
+            
+            # Now add region labels with overlap prevention
+            self._add_region_labels_with_overlap_prevention(ax, coords, customer_postcodes, depot)
+
+        # Keep longitude/latitude dimensions consistent with equal 0.2 tick spacing
+        self._configure_equal_geo_axes(ax, coords, depot=depot, tick_step=0.2)
         
         ax.set_xlabel('Longitude', fontsize=12, fontweight='bold')
         ax.set_ylabel('Latitude', fontsize=12, fontweight='bold')
-        ax.set_title(f'Regional Clustering: {n_clusters} Regions, {len(coords)} Locations\nHome Base at center', 
-                    fontsize=14, fontweight='bold')
-        ax.legend(loc='best', fontsize=9)
+        if self.show_points:
+            ax.legend(loc='best', fontsize=9)
         ax.grid(True, alpha=0.3)
         
         # Embed in tkinter with dedicated frames so toolbar stays visible on resize
@@ -1937,7 +2505,8 @@ class TSPClusteringApp:
         
         # Create figure (constrained layout prevents axis labels from being clipped)
         fig = Figure(figsize=(12, 8), dpi=100, constrained_layout=True)
-        ax = fig.add_subplot(111)
+        ax = self._create_plot_axis(fig)
+        self._draw_map_background(ax)
         
         # Plot all locations (not yet clustered)
         ax.scatter(coords[:, 1], coords[:, 0], 
@@ -2004,11 +2573,12 @@ class TSPClusteringApp:
                    bbox=dict(boxstyle='round,pad=0.4', facecolor='yellow', 
                             edgecolor='black', alpha=0.8, linewidth=2),
                    zorder=15)
+
+        # Keep longitude/latitude dimensions consistent with equal 0.2 tick spacing
+        self._configure_equal_geo_axes(ax, coords, depot=depot, tick_step=0.2)
         
         ax.set_xlabel('Longitude', fontsize=12, fontweight='bold')
         ax.set_ylabel('Latitude', fontsize=12, fontweight='bold')
-        ax.set_title(f'All Locations: {len(coords)} Points\\nReady for Clustering - Configure parameters and Run', 
-                    fontsize=14, fontweight='bold')
         ax.legend(loc='best', fontsize=10)
         ax.grid(True, alpha=0.3)
         

@@ -1755,7 +1755,7 @@ class SmartSchedulerApp:
         except Exception as e:
             print(f"Error managing category '{category_name}': {e}")
     
-    def create_outlook_appointment(self, outlook, postcode, date_str, time_str, duration_minutes, category_name, color_index):
+    def create_outlook_appointment(self, outlook, postcode, date_str, time_str, duration_minutes, category_name, color_index, client_name=None):
         """Create an Outlook appointment for a confirmed appointment"""
         try:
             # Ensure category exists with correct color
@@ -1769,14 +1769,6 @@ class SmartSchedulerApp:
             
             start_datetime = datetime(date_obj.year, date_obj.month, date_obj.day, hours, minutes)
             end_datetime = start_datetime + timedelta(minutes=duration_minutes)
-            
-            # Get client name from clustered_regions_df
-            client_name = None
-            if self.clustered_regions_df is not None:
-                postcode_upper = postcode.strip().upper()
-                location_data = self.clustered_regions_df[self.clustered_regions_df['postcode'].str.upper() == postcode_upper]
-                if len(location_data) > 0 and 'client_name' in location_data.columns:
-                    client_name = location_data.iloc[0]['client_name']
             
             # Get region and list of all locations in that region
             region_locations = ""
@@ -1872,7 +1864,7 @@ class SmartSchedulerApp:
                     category_name = f"Appointment - {color_name}"
                     
                     # Create Outlook appointment
-                    if self.create_outlook_appointment(outlook, postcode, date, time_str, duration, category_name, color_code):
+                    if self.create_outlook_appointment(outlook, postcode, date, time_str, duration, category_name, color_code, client_name):
                         created_count += 1
                         # Update in memory
                         self.confirmed_appointments[(client_name, date, time_str)] = (postcode, duration, True)
@@ -1977,7 +1969,7 @@ class SmartSchedulerApp:
                 color_code = self.get_region_color_for_postcode(actual_postcode)
                 color_name = OUTLOOK_COLORS.get(color_code, "Red")
                 category_name = f"Appointment - {color_name}"
-                outlook_success = self.create_outlook_appointment(outlook, postcode, date, time, duration, category_name, color_code)
+                outlook_success = self.create_outlook_appointment(outlook, postcode, date, time, duration, category_name, color_code, client_name)
             except Exception as e:
                 self.show_error_dialog("Outlook Error", f"Failed to create Outlook appointment:\\n{e}")
                 outlook_success = False
