@@ -37,8 +37,8 @@ class PostcodeDistanceApp:
         if DISPLAY_PREFS_AVAILABLE:
             try:
                 init_display_prefs(self.project_dir if self.project_dir else os.getcwd())
-            except Exception as e:
-                print(f"Warning: Could not initialize display preferences: {e}")
+            except Exception:
+                pass
         
         self.setup_ui()
         
@@ -498,7 +498,6 @@ def main():
     if len(sys.argv) > 1:
         project_dir = sys.argv[1]
         if not os.path.exists(project_dir):
-            print(f"Warning: Project directory not found: {project_dir}")
             project_dir = None
     
     root = tk.Tk()

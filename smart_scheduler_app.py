@@ -10,7 +10,10 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import win32com.client
 import time
-import pyperclip
+try:
+    import pyperclip
+except ImportError:
+    pyperclip = None
 import string
 
 # Import display preferences
@@ -314,8 +317,8 @@ class SmartSchedulerApp:
             
             # Redraw timetable
             self.update_timetable()
-        except Exception as e:
-            print(f"Error updating displays: {e}")
+        except Exception:
+            pass
     
     def show_info_dialog(self, title, message):
         """Show an info dialog that stays on top of the main window"""
@@ -1520,10 +1523,8 @@ class SmartSchedulerApp:
                 # Round up to nearest multiple of 30 for slot allocation
                 return max(int(travel_time), 1) if travel_time > 0 else 30
             else:
-                print(f"Warning: No distance found for {origin} -> {destination}, using default 30 minutes")
                 return 30  # Default if not found
-        except Exception as e:
-            print(f"Error looking up travel time between {origin} and {destination}: {e}")
+        except Exception:
             return 30
     
     def display_travel_times(self, postcode):
@@ -1752,8 +1753,8 @@ class SmartSchedulerApp:
             except:
                 # Category doesn't exist, create it
                 category = categories.Add(category_name, color_index)
-        except Exception as e:
-            print(f"Error managing category '{category_name}': {e}")
+        except Exception:
+            pass
     
     def create_outlook_appointment(self, outlook, postcode, date_str, time_str, duration_minutes, category_name, color_index, client_name=None):
         """Create an Outlook appointment for a confirmed appointment"""
@@ -1872,7 +1873,6 @@ class SmartSchedulerApp:
                         failed.append(f"{postcode} @ {date} {time_str}")
                 except Exception as e:
                     failed.append(f"{postcode} @ {date} {time_str} ({str(e)})")
-                    print(f"Error syncing {postcode}: {e}")
             
             # Update CSV with in_outlook flag
             df = pd.read_csv(self.appointments_csv)
@@ -2235,8 +2235,8 @@ class SmartSchedulerApp:
         try:
             if self.message_template_path and self.message_template_path.exists():
                 return self.message_template_path.read_text(encoding="utf-8")
-        except Exception as e:
-            print(f"[DEBUG] Failed to load message template: {e}")
+        except Exception:
+            pass
 
         return self.get_default_message_template()
 
@@ -2248,8 +2248,7 @@ class SmartSchedulerApp:
         try:
             self.message_template_path.write_text(template_text, encoding="utf-8")
             return True
-        except Exception as e:
-            print(f"[DEBUG] Failed to save message template: {e}")
+        except Exception:
             return False
 
     def open_template_editor(self, on_saved=None):
@@ -2478,7 +2477,12 @@ class SmartSchedulerApp:
             
             message = self.format_availability_message(selected_slots)
             try:
-                pyperclip.copy(message)
+                if pyperclip is not None:
+                    pyperclip.copy(message)
+                else:
+                    dialog.clipboard_clear()
+                    dialog.clipboard_append(message)
+                    dialog.update()
                 status_label.config(text="✓ Copied to clipboard!", foreground='green')
                 copy_button.config(state='disabled')
                 # Reset after 2 seconds

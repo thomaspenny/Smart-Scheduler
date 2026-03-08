@@ -22,40 +22,52 @@ TSPClusteringApp = None
 CalendarOrganizerApp = None
 SmartSchedulerApp = None
 
+import_errors = []
+
 try:
-    print("Attempting to import postcode_distance_app...")
     from postcode_distance_app import PostcodeDistanceApp
-    print("✓ postcode_distance_app imported")
+    print("✓ PostcodeDistanceApp imported successfully")
 except Exception as e:
-    print(f"✗ Failed to import postcode_distance_app: {e}")
+    import_errors.append(f"PostcodeDistanceApp: {e}")
+    print(f"✗ PostcodeDistanceApp import failed: {e}")
 
 try:
-    print("Attempting to import tsp_clustering_app...")
     from tsp_clustering_app import TSPClusteringApp
-    print("✓ tsp_clustering_app imported")
+    print("✓ TSPClusteringApp imported successfully")
 except Exception as e:
-    print(f"✗ Failed to import tsp_clustering_app: {e}")
+    import_errors.append(f"TSPClusteringApp: {e}")
+    print(f"✗ TSPClusteringApp import failed: {e}")
 
 try:
-    print("Attempting to import calendar_organizer_app...")
     from calendar_organizer_app import CalendarOrganizerApp
-    print("✓ calendar_organizer_app imported")
+    print("✓ CalendarOrganizerApp imported successfully")
 except Exception as e:
-    print(f"✗ Failed to import calendar_organizer_app: {e}")
+    import_errors.append(f"CalendarOrganizerApp: {e}")
+    print(f"✗ CalendarOrganizerApp import failed: {e}")
 
 try:
-    print("Attempting to import smart_scheduler_app...")
     from smart_scheduler_app import SmartSchedulerApp
-    print("✓ smart_scheduler_app imported")
+    print("✓ SmartSchedulerApp imported successfully")
 except Exception as e:
-    print(f"✗ Failed to import smart_scheduler_app: {e}")
+    import_errors.append(f"SmartSchedulerApp: {e}")
+    print(f"✗ SmartSchedulerApp import failed: {e}")
 
 # Check if all imports succeeded
 if all([PostcodeDistanceApp, TSPClusteringApp, CalendarOrganizerApp, SmartSchedulerApp]):
     APPS_IMPORTED = True
-    print("SUCCESS: All apps imported successfully")
+    print("SUCCESS: All apps imported")
 else:
-    print(f"WARNING: Some apps failed to import. APPS_IMPORTED=False")
+    APPS_IMPORTED = False
+    print(f"WARNING: Some apps failed to import. Errors: {import_errors}")
+
+print("\n" + "="*60)
+print("Import Status Summary:")
+print(f"  PostcodeDistanceApp: {'OK' if PostcodeDistanceApp else 'FAILED'}")
+print(f"  TSPClusteringApp: {'OK' if TSPClusteringApp else 'FAILED'}")
+print(f"  CalendarOrganizerApp: {'OK' if CalendarOrganizerApp else 'FAILED'}")
+print(f"  SmartSchedulerApp: {'OK' if SmartSchedulerApp else 'FAILED'}")
+print(f"  APPS_IMPORTED: {APPS_IMPORTED}")
+print("="*60 + "\n")
 
 
 class ProjectLauncher:
@@ -104,8 +116,7 @@ class ProjectLauncher:
                         if key not in config:
                             config[key] = default_config[key]
                     return config
-            except Exception as e:
-                print(f"Error loading config: {e}")
+            except Exception:
                 return default_config
         else:
             return default_config
@@ -900,10 +911,16 @@ class ProjectLauncher:
         # Determine if we're running as an EXE
         is_frozen = getattr(sys, 'frozen', False)
         
-        print(f"DEBUG: is_frozen={is_frozen}, APPS_IMPORTED={APPS_IMPORTED}, app_class={app_class}")
-        
         # If running as EXE, we MUST use the imported classes
         if is_frozen:
+            print(f"\n=== LAUNCHING {app_display_name} ===")
+            print(f"APPS_IMPORTED: {APPS_IMPORTED}")
+            print(f"app_class: {app_class}")
+            print(f"PostcodeDistanceApp: {PostcodeDistanceApp}")
+            print(f"TSPClusteringApp: {TSPClusteringApp}")
+            print(f"CalendarOrganizerApp: {CalendarOrganizerApp}")
+            print(f"SmartSchedulerApp: {SmartSchedulerApp}")
+            
             if APPS_IMPORTED and app_class:
                 try:
                     # Launch directly in main thread for proper tkinter behavior
@@ -912,14 +929,17 @@ class ProjectLauncher:
                     return
                 except Exception as e:
                     import traceback
-                    error_details = traceback.format_exc()
-                    print(f"Failed to launch via import: {error_details}")
+                    error_detail = traceback.format_exc()
+                    print(f"\n!!! ERROR LAUNCHING APP !!!")
+                    print(error_detail)
                     messagebox.showerror("Error", 
                                        f"Failed to launch {app_display_name}:\n{e}\n\n"
                                        f"Please check the error log.")
                     return
             else:
                 # Running as EXE but imports failed - cannot proceed
+                print(f"\n!!! IMPORT FAILURE !!!")
+                print(f"Import errors: {import_errors}")
                 messagebox.showerror("Error", 
                                    f"Failed to launch {app_display_name}.\n\n"
                                    f"The application components could not be loaded.\n"
@@ -933,9 +953,9 @@ class ProjectLauncher:
                 new_root = tk.Toplevel(self.root)
                 app_class(new_root, project_dir=project_path)
                 return
-            except Exception as e:
-                print(f"Failed to launch via import, trying subprocess: {e}")
+            except Exception:
                 # Fall through to subprocess method
+                pass
         
         # Subprocess method (development mode only)
         app_path = os.path.join(self.app_directory, app_filename)

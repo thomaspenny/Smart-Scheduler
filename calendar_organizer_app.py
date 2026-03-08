@@ -81,8 +81,8 @@ class CalendarOrganizerApp:
             try:
                 init_display_prefs(self.project_dir if self.project_dir else os.getcwd())
                 register_callback(self.on_display_preference_changed)
-            except Exception as e:
-                print(f"Warning: Could not initialize display preferences: {e}")
+            except Exception:
+                pass
         
         self.setup_ui()
         
@@ -720,8 +720,8 @@ class CalendarOrganizerApp:
             except:
                 # Category doesn't exist, create it
                 category = categories.Add(category_name, color_index)
-        except Exception as e:
-            print(f"Error managing category '{category_name}': {e}")
+        except Exception:
+            pass
     
     def create_appointment(self, outlook, subject, start_time, category_name, color_index, body_text=None):
         """Create an Outlook appointment for a region assignment"""
@@ -742,8 +742,7 @@ class CalendarOrganizerApp:
             appointment.Save()
             
             return appointment
-        except Exception as e:
-            print(f"Error creating appointment: {e}")
+        except Exception:
             return None
     
     def export_to_outlook(self):
@@ -844,7 +843,6 @@ def main():
     if len(sys.argv) > 1:
         project_dir = sys.argv[1]
         if not os.path.exists(project_dir):
-            print(f"Warning: Project directory does not exist: {project_dir}")
             project_dir = None
     
     root = tk.Tk()

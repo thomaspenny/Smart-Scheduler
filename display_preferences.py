@@ -26,7 +26,6 @@ def initialize(config_dir=None):
         config_dir = os.getcwd()
     
     _preference_file = os.path.join(config_dir, "display_preferences.json")
-    print(f"[DEBUG display_prefs] Initializing with preference file: {_preference_file}")
     
     # Load existing preferences or create default
     if os.path.exists(_preference_file):
@@ -34,13 +33,10 @@ def initialize(config_dir=None):
             with open(_preference_file, 'r') as f:
                 data = json.load(f)
                 _display_preference = data.get('show_names', False)
-            print(f"[DEBUG display_prefs] Loaded preferences: show_names = {_display_preference}")
-        except Exception as e:
-            print(f"[DEBUG display_prefs] Error loading preferences: {e}")
+        except Exception:
             _display_preference = False
     else:
         _display_preference = False
-        print(f"[DEBUG display_prefs] No existing preference file, using default: False")
     
     return _display_preference
 
@@ -50,32 +46,27 @@ def get_show_names():
     global _display_preference
     if _display_preference is None:
         initialize()
-    print(f"[DEBUG display_prefs] get_show_names() returning: {_display_preference}")
     return _display_preference
 
 
 def set_show_names(show_names):
     """Set the display preference and persist to file"""
     global _display_preference
-    print(f"[DEBUG display_prefs] set_show_names() called with: {show_names}")
     _display_preference = show_names
     
     if _preference_file:
         try:
             with open(_preference_file, 'w') as f:
                 json.dump({'show_names': show_names}, f)
-            print(f"[DEBUG display_prefs] Preferences saved to {_preference_file}")
-        except Exception as e:
-            print(f"[DEBUG display_prefs] Warning: Could not save display preference: {e}")
+        except Exception:
+            pass
     
     # Notify all listeners
-    print(f"[DEBUG display_prefs] Notifying {len(_preference_callbacks)} callbacks")
     for callback in _preference_callbacks:
         try:
             callback(show_names)
-            print(f"[DEBUG display_prefs] Callback executed successfully")
-        except Exception as e:
-            print(f"[DEBUG display_prefs] Warning: Callback error: {e}")
+        except Exception:
+            pass
 
 
 def register_callback(callback):
