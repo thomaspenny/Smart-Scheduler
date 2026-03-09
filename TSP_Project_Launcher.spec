@@ -5,8 +5,11 @@ a = Analysis(
     ['project_launcher.py'],
     pathex=[],
     binaries=[],
-    datas=[('help.html', '.')],
-    hiddenimports=['postcode_distance_app', 'tsp_clustering_app', 'calendar_organizer_app', 'smart_scheduler_app', 'display_preferences', 'pandas', 'requests', 'shapely', 'sklearn', 'scipy', 'matplotlib', 'win32com.client', 'win32timezone', 'cartopy'],
+    datas=[
+        ('help.html', '.'),
+        ('C:\\Users\\penny\\AppData\\Local\\Programs\\Python\\Python39\\lib\\site-packages\\cartopy\\data', 'cartopy/data'),
+    ],
+    hiddenimports=['postcode_distance_app', 'tsp_clustering_app', 'calendar_organizer_app', 'smart_scheduler_app', 'display_preferences', 'pandas', 'requests', 'shapely', 'sklearn', 'scipy', 'matplotlib', 'win32com.client', 'win32timezone', 'cartopy', 'cartopy.crs', 'cartopy.feature'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
